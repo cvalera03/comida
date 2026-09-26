@@ -21,6 +21,7 @@ const CATEGORIES = ['Frutas y verduras', 'Carne', 'Pescado', 'Lácteos y huevos'
 
 const ICON = {
   plus: '<svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>',
+  history: '<svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5M12 7v5l3 2"/></svg>',
   store: '<svg viewBox="0 0 24 24"><path d="M4 10v10h16V10M3 10l2-6h14l2 6zM9 20v-6h6v6"/></svg>',
   check: '<svg viewBox="0 0 24 24"><path d="m5 12 5 5 9-10"/></svg>',
   chev: '<svg class="chev" viewBox="0 0 8 13"><path d="m1 1 6 5.5L1 12"/></svg>',
@@ -48,11 +49,12 @@ function index() {
   const stores = new Map(d.stores.map((s) => [s.id, s]));
   const prices = {};
   for (const p of d.prices) (prices[p.product_id] ||= {})[p.store_id] = p;
-  const shoppingByProduct = new Map(d.shopping.filter((s) => !s.checked).map((s) => [s.product_id, s]));
+  const shoppingByProduct = new Map(d.shopping.map((s) => [s.product_id, s]));
+  const recipes = new Map(d.recipes.map((r) => [r.id, r]));
   const usedIn = {};
   for (const r of d.recipes) for (const i of r.ingredients) (usedIn[i.product_id] ||= []).push(r);
   const categories = [...new Set([...CATEGORIES, ...d.products.map((p) => p.category).filter(Boolean)])];
-  IDX = { products, stores, prices, shoppingByProduct, usedIn, categories };
+  IDX = { products, stores, prices, shoppingByProduct, usedIn, categories, recipes };
 }
 
 function bestPrice(pid) {
@@ -249,9 +251,9 @@ function viewSemana() {
         <span class="pill ${miss ? 'warn' : 'ok'}">${miss ? `Faltan ${miss}` : 'Todo listo'}</span>${ICON.chev}</button>`;
     }).join('')}</div></div>`;
 
-    h += `<div class="btn-row">
-      <button class="btn primary" data-act="generate-list" ${notListed.length ? '' : 'disabled'}>
-        ${notListed.length ? `Añadir lo que falta (${notListed.length})` : missing.length ? 'Todo en la lista ✓' : 'No falta nada ✓'}</button>
+    h += `<div class="btn-row">${notListed.length
+      ? `<button class="btn primary" data-act="generate-list">Volver a añadir lo que falta (${notListed.length})</button>`
+      : `<button class="btn primary" data-tab-go="compra">${missing.length ? 'Ver la lista de la compra' : 'No falta nada ✓'}</button>`}
     </div>
     <div class="btn-row">
       <button class="btn" data-act="cooked">Ya hemos cocinado</button>
@@ -262,7 +264,7 @@ function viewSemana() {
       h += `<div class="section-title">Os falta</div><div class="card"><ul class="list ing-list">${missing.map((n) => `
         <li><span class="dot ${n.p.staple ? 'staple' : 'no'}"></span>
         <span>${esc(n.p.name)}<div class="meta muted small">${esc(n.recipes.join(', '))}</div></span>
-        <span class="q">${esc(n.qty.join(' + '))}${IDX.shoppingByProduct.has(n.p.id) ? '<br><span class="pill ok">En la lista</span>' : ''}</span></li>`).join('')}
+        <span class="q">${IDX.shoppingByProduct.has(n.p.id) ? '<span class="pill ok">En la lista</span>' : '<span class="pill">No está en la lista</span>'}</span></li>`).join('')}
       </ul></div>`;
     }
   }
@@ -313,9 +315,10 @@ function viewCompra() {
   const pending = S.data.shopping.filter((s) => !s.checked);
   const checked = S.data.shopping.filter((s) => s.checked);
   const est = shoppingEstimate(pending);
-  let h = header('Compra', pending.length
-    ? `${plural(pending.length, 'pendiente', 'pendientes')}${est.priced ? ` · desde ${eur(est.total)}` : ''}`
-    : 'Lista vacía');
+  const since = S.data.list ? `Lista del ${fmtDate(S.data.list.created_at)}` : '';
+  let h = header('Compra', [since, pending.length ? plural(pending.length, 'pendiente', 'pendientes') : 'nada pendiente',
+    est.priced ? `desde ${eur(est.total)}` : ''].filter(Boolean).join(' · '),
+    S.data.history.length ? `<button class="icon-btn ghost" data-act="history" aria-label="Compras anteriores">${ICON.history}</button>` : '');
 
   h += `<form class="card pad" data-form="add-shopping" autocomplete="off">
     <div class="ing-row" style="grid-template-columns:1fr 90px auto;margin:0">
@@ -325,10 +328,13 @@ function viewCompra() {
     </div>${datalistProducts()}</form>`;
 
   if (!S.data.shopping.length) {
-    h += `<div class="spacer"></div>` + empty('Nada que comprar', 'Genera la lista desde «Semana» o añade cosas a mano. Al marcar algo como agotado en la despensa también aparece aquí.');
+    h += `<div class="spacer"></div>` + empty('Nada que comprar', 'Marca recetas en «Semana» y sus ingredientes aparecerán aquí solos. También podéis añadir cosas a mano o desde la despensa.');
     return h;
   }
 
+  if (pending.length) {
+    h += `<p class="hint">Toca para meterlo en el carro. Con × lo quitáis (si era de una receta, queda como «lo tenemos»).</p>`;
+  }
   for (const [cat, items] of groupBy(pending, (s) => s.category || '')) {
     h += `<div class="section-title">${esc(cat || 'Sin categoría')}</div><div class="card"><div class="list">${items.map(shopRow).join('')}</div></div>`;
   }
@@ -336,21 +342,30 @@ function viewCompra() {
     h += `<div class="btn-row"><button class="btn" data-tab-go="ahorro">Ver dónde es más barato</button></div>`;
   }
   if (checked.length) {
-    h += `<div class="section-title">En el carro (${checked.length})</div><div class="card"><div class="list">${checked.map(shopRow).join('')}</div></div>
-      <div class="btn-row"><button class="btn primary" data-act="finish-shopping">Terminar compra y pasar a la despensa</button></div>`;
+    h += `<div class="section-title">En el carro (${checked.length})</div><div class="card"><div class="list">${checked.map(shopRow).join('')}</div></div>`;
   }
-  h += `<div class="btn-row"><button class="btn danger small" data-act="clear-shopping">Vaciar lista</button></div>`;
+  h += `<div class="btn-row"><button class="btn ${checked.length ? 'primary' : ''}" data-act="finish-shopping">Terminar esta compra</button></div>
+    <div class="btn-row"><button class="btn danger small" data-act="clear-shopping">Vaciar lista</button></div>`;
   return h;
+}
+
+function fmtDate(ts) {
+  return new Date(ts * 1000).toLocaleDateString('es-ES', { day: 'numeric', month: 'short' });
+}
+
+function recipeNames(ids) {
+  return ids.map((id) => IDX.recipes.get(id)?.name).filter(Boolean);
 }
 
 function shopRow(s) {
   const b = bestPrice(s.product_id);
-  const meta = [s.quantity, s.source].filter(Boolean).join(' · ');
+  const meta = [s.quantity, recipeNames(s.recipe_ids).join(', ')].filter(Boolean).join(' · ');
   return `<div class="row" data-act="toggle-shop" data-id="${s.id}">
     <button class="check ${s.checked ? 'on' : ''}" aria-label="Marcar">${ICON.check}</button>
     <span class="main"><div class="title" style="${s.checked ? 'text-decoration:line-through;opacity:.55' : ''}">${esc(s.name)}</div>${meta ? `<div class="meta">${esc(meta)}</div>` : ''}</span>
-    ${b ? `<span class="end num">${eur(b.price)}<div class="small">${esc(b.store)}</div></span>` : ''}
-    <button class="btn small" data-act="shop-menu" data-id="${s.id}" aria-label="Opciones">···</button></div>`;
+    ${b && !s.checked ? `<span class="end num">${eur(b.price)}<div class="small">${esc(b.store)}</div></span>` : ''}
+    <button class="row-btn" data-act="shop-menu" data-id="${s.id}" aria-label="Detalles">···</button>
+    ${s.checked ? '' : `<button class="row-btn danger" data-act="remove-shop" data-id="${s.id}" aria-label="Quitar ${esc(s.name)}">×</button>`}</div>`;
 }
 
 function datalistProducts() {
@@ -535,7 +550,7 @@ function openRecipe(id) {
     </div>
     <div class="section-title">Ingredientes</div>
     <div class="card">${ings.length ? `<ul class="list ing-list">${ings.map((i) => `<li data-act="open-product" data-id="${i.p.id}" style="cursor:pointer">
-      <span class="dot ${i.p.in_stock ? 'ok' : 'no'}"></span><span>${esc(i.p.name)}${i.p.staple ? ' <span class="pill">básico</span>' : ''}</span>
+      <span class="dot ${i.p.in_stock ? 'ok' : 'no'}"></span><span>${esc(i.p.name)}${i.p.staple ? ' <span class="pill">básico</span>' : ''}${IDX.shoppingByProduct.has(i.p.id) ? ' <span class="pill ok">en la lista</span>' : ''}</span>
       <span class="q">${esc(i.quantity)}</span></li>`).join('')}</ul>` : '<div class="empty">Sin ingredientes</div>'}</div>
     <p class="hint"><span class="dot ok"></span> lo tenéis · <span class="dot no"></span> falta</p>
     ${r.instructions ? `<div class="section-title">Preparación</div><div class="card pad recipe-body">${esc(r.instructions)}</div>` : ''}
@@ -667,14 +682,61 @@ function openStores() {
 function openShopItem(id) {
   const s = S.data.shopping.find((x) => x.id === id);
   if (!s) return;
+  // Cantidad que pide cada receta, solo como referencia (no se suman).
+  const uses = recipeNames(s.recipe_ids).map((name) => {
+    const r = S.data.recipes.find((x) => x.name === name);
+    const q = r?.ingredients.find((i) => i.product_id === s.product_id)?.quantity;
+    return `<li><span>${esc(name)}</span><span class="q">${esc(q || '')}</span></li>`;
+  });
   const html = sheetHead(s.name, 'Cerrar') + `
+    ${uses.length ? `<div class="section-title">Lo piden estas recetas</div><div class="card"><ul class="list ing-list">${uses.join('')}</ul></div><div class="spacer"></div>` : ''}
     <form data-form="shop-item" data-id="${s.id}" autocomplete="off">
-      <label class="field"><span>Cantidad</span><input name="quantity" value="${esc(s.quantity)}" placeholder="2 kg"></label>
-      ${s.source ? `<p class="hint">Para: ${esc(s.source)}</p>` : ''}
+      <label class="field"><span>Cantidad a comprar (opcional)</span><input name="quantity" value="${esc(s.quantity)}" placeholder="2 botes"></label>
       <button class="btn primary block">Guardar</button></form>
-    <div class="btn-row"><button class="btn" data-act="open-product" data-id="${s.product_id}">Ver producto y precios</button></div>
-    <div class="btn-row"><button class="btn danger" data-act="delete-shop" data-id="${s.id}">Quitar de la lista</button></div>`;
+    <div class="btn-row"><button class="btn" data-act="have-shop" data-id="${s.id}">Ya lo tenemos en casa</button></div>
+    <div class="btn-row"><button class="btn danger" data-act="delete-shop" data-id="${s.id}">Quitar sin marcar en la despensa</button></div>
+    <div class="btn-row"><button class="btn small" data-act="open-product" data-id="${s.product_id}">Ver producto y precios</button></div>`;
   openSheet(html, { kind: 'shop', id });
+}
+
+function openFinish() {
+  const checked = S.data.shopping.filter((s) => s.checked);
+  const pending = S.data.shopping.filter((s) => !s.checked);
+  const html = sheetHead('Terminar compra', 'Cancelar') + `
+    <div class="card pad">${checked.length
+      ? `<b>${plural(checked.length, 'producto comprado', 'productos comprados')}</b><div class="muted small">Pasarán a la despensa como «lo tenemos».</div>`
+      : '<b>No habéis marcado nada como comprado.</b>'}</div>
+    ${pending.length ? `<div class="section-title">Sin comprar (${pending.length})</div>
+      <div class="card pad small muted">${esc(pending.map((s) => s.name).join(', '))}</div>
+      <p class="hint">¿Qué hacemos con esto?</p>
+      <div class="btn-row"><button class="btn primary" data-act="confirm-finish" data-carry="1">Pasarlo a la próxima compra</button></div>
+      <div class="btn-row"><button class="btn danger" data-act="confirm-finish" data-carry="0">Descartarlo</button></div>`
+    : `<div class="btn-row"><button class="btn primary" data-act="confirm-finish" data-carry="0">Terminar</button></div>`}
+    <p class="hint">Esta lista se guardará en «Compras anteriores» y empezaréis una nueva.</p>`;
+  openSheet(html, { kind: 'finish' });
+}
+
+function openHistory(listId) {
+  const lists = S.data.history;
+  if (listId) {
+    const l = lists.find((x) => x.id === listId);
+    if (!l) return openHistory();
+    const bought = l.items.filter((i) => i.checked);
+    const left = l.items.filter((i) => !i.checked);
+    const html = sheetHead(`Compra del ${fmtDate(l.closed_at)}`, 'Atrás') + `
+      <div class="section-title">Comprado (${bought.length})</div>
+      <div class="card">${bought.length ? `<ul class="list ing-list">${bought.map((i) => `<li><span class="dot ok"></span><span>${esc(i.name)}</span><span class="q">${esc(i.quantity)}</span></li>`).join('')}</ul>` : '<div class="empty">Nada</div>'}</div>
+      ${left.length ? `<div class="section-title">No se compró (${left.length})</div><div class="card"><ul class="list ing-list">${left.map((i) => `<li><span class="dot no"></span><span>${esc(i.name)}</span></li>`).join('')}</ul></div>` : ''}
+      <div class="btn-row"><button class="btn danger small" data-act="delete-history" data-id="${l.id}">Borrar del historial</button></div>`;
+    openSheet(html, { kind: 'history', id: listId, back: true });
+    return;
+  }
+  const html = sheetHead('Compras anteriores', 'Cerrar') + (lists.length
+    ? `<div class="card"><div class="list">${lists.map((l) => `<button class="row" data-act="open-history" data-id="${l.id}">
+        <span class="main"><div class="title">Compra del ${fmtDate(l.closed_at)}</div>
+        <div class="meta">${plural(l.items.filter((i) => i.checked).length, 'producto comprado', 'productos comprados')}</div></span>${ICON.chev}</button>`).join('')}</div></div>`
+    : empty('Sin historial', 'Aquí aparecerán las compras que terminéis.'));
+  openSheet(html, { kind: 'history' });
 }
 
 // Hemos cocinado
@@ -694,7 +756,7 @@ function openCooked() {
 
 // ---------------------------------------------------------------- acciones --
 const ACTIONS = {
-  'close-sheet': () => closeSheet(),
+  'close-sheet': () => (S.sheet?.back ? openHistory() : closeSheet()),
   'new-recipe': () => editRecipe(null),
   'open-recipe': (t) => openRecipe(Number(t.dataset.id)),
   'edit-recipe': () => editRecipe(S.sheet.id),
@@ -706,11 +768,14 @@ const ACTIONS = {
     await api('DELETE', `/api/recipes/${t.dataset.id}`);
     closeSheet(); toast('Receta eliminada');
   },
-  'toggle-plan': (t) => {
+  'toggle-plan': async (t) => {
     const id = Number(t.dataset.id);
     const r = S.data.recipes.find((x) => x.id === id);
     const planned = !r.planned;
-    api('PATCH', `/api/recipes/${id}`, { planned }, { optimistic: (d) => { d.recipes.find((x) => x.id === id).planned = planned ? 1 : 0; } });
+    const res = await api('PATCH', `/api/recipes/${id}`, { planned }, { optimistic: (d) => { d.recipes.find((x) => x.id === id).planned = planned ? 1 : 0; } });
+    if (res.added) toast(`${r.name}: ${plural(res.added, 'ingrediente añadido', 'ingredientes añadidos')} a la compra`);
+    else if (res.removed) toast(`${r.name}: ${plural(res.removed, 'ingrediente quitado', 'ingredientes quitados')} de la compra`);
+    else if (planned) toast(`${r.name}: tenéis todo en casa`);
   },
   'generate-list': async () => {
     const r = await api('POST', '/api/plan/generate-list');
@@ -735,9 +800,28 @@ const ACTIONS = {
   },
   'shop-menu': (t) => openShopItem(Number(t.dataset.id)),
   'delete-shop': async (t) => { await api('DELETE', `/api/shopping/${t.dataset.id}`); closeSheet(); },
-  'finish-shopping': async () => {
-    const r = await api('POST', '/api/shopping/finish');
-    toast(`${plural(r.stocked, 'producto', 'productos')} a la despensa`);
+  'have-shop': async (t) => { await api('POST', `/api/shopping/${t.dataset.id}/have`); closeSheet(); toast('Quitado y marcado en la despensa'); },
+  'remove-shop': async (t) => {
+    const id = Number(t.dataset.id);
+    const s = S.data.shopping.find((x) => x.id === id);
+    const fromRecipe = s.recipe_ids.length > 0;
+    await api(fromRecipe ? 'POST' : 'DELETE', `/api/shopping/${id}${fromRecipe ? '/have' : ''}`, null,
+      { optimistic: (d) => { d.shopping = d.shopping.filter((x) => x.id !== id); } });
+    toast(fromRecipe ? `${s.name}: quitado, lo tenéis en casa` : `${s.name}: quitado`);
+  },
+  'finish-shopping': () => openFinish(),
+  'confirm-finish': async (t) => {
+    const r = await api('POST', '/api/shopping/finish', { carry_over: t.dataset.carry === '1' });
+    closeSheet();
+    toast([r.stocked ? `${plural(r.stocked, 'producto', 'productos')} a la despensa` : '',
+      r.carried ? `${r.carried} a la próxima compra` : ''].filter(Boolean).join(' · ') || 'Compra terminada');
+  },
+  'history': () => openHistory(),
+  'open-history': (t) => openHistory(Number(t.dataset.id)),
+  'delete-history': async (t) => {
+    if (!confirm('¿Borrar esta compra del historial?')) return;
+    await api('DELETE', `/api/history/${t.dataset.id}`);
+    await loadState(); openHistory();
   },
   'clear-shopping': async () => { if (confirm('¿Vaciar toda la lista de la compra?')) await api('POST', '/api/shopping/clear'); },
 

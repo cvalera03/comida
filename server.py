@@ -25,6 +25,7 @@ import sqlite3
 import sys
 import threading
 import time
+import unicodedata
 from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
@@ -119,14 +120,28 @@ CREATE TABLE IF NOT EXISTS recipe_ingredients(
   quantity TEXT NOT NULL DEFAULT '',
   position INTEGER NOT NULL DEFAULT 0
 );
+-- Cada compra es una lista: la abierta es la actual, las cerradas son el historial.
+CREATE TABLE IF NOT EXISTS shopping_lists(
+  id INTEGER PRIMARY KEY,
+  created_at INTEGER,
+  closed_at INTEGER
+);
 CREATE TABLE IF NOT EXISTS shopping(
   id INTEGER PRIMARY KEY,
+  list_id INTEGER REFERENCES shopping_lists(id) ON DELETE CASCADE,
   product_id INTEGER REFERENCES products(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   quantity TEXT NOT NULL DEFAULT '',
-  source TEXT NOT NULL DEFAULT '',
+  source TEXT NOT NULL DEFAULT '',        -- obsoleto; se sustituye por shopping_recipes
+  manual INTEGER NOT NULL DEFAULT 0,      -- 1 = añadido a mano (no se quita al desmarcar recetas)
   checked INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER
+);
+-- Qué recetas han pedido cada producto de la lista (un producto aparece una sola vez).
+CREATE TABLE IF NOT EXISTS shopping_recipes(
+  shopping_id INTEGER NOT NULL REFERENCES shopping(id) ON DELETE CASCADE,
+  recipe_id INTEGER NOT NULL REFERENCES recipes(id) ON DELETE CASCADE,
+  PRIMARY KEY(shopping_id, recipe_id)
 );
 CREATE INDEX IF NOT EXISTS idx_ing_recipe ON recipe_ingredients(recipe_id);
 CREATE INDEX IF NOT EXISTS idx_shop_product ON shopping(product_id);
@@ -161,7 +176,30 @@ def init_db():
                     "INSERT INTO products(name, category, staple, in_stock, updated_at) VALUES (?,?,1,1,?)",
                     (name, cat, now),
                 )
+        migrate()
         DB.commit()
+
+
+def migrate():
+    """Actualiza bases de datos creadas con versiones anteriores sin perder datos."""
+    cols = {r[1] for r in DB.execute("PRAGMA table_info(shopping)")}
+    if "list_id" not in cols:
+        DB.execute("ALTER TABLE shopping ADD COLUMN list_id INTEGER "
+                   "REFERENCES shopping_lists(id) ON DELETE CASCADE")
+    if "manual" not in cols:
+        DB.execute("ALTER TABLE shopping ADD COLUMN manual INTEGER NOT NULL DEFAULT 0")
+        # Antes se guardaban los nombres de las recetas como texto: los enlazamos.
+        for s in rows("SELECT id, source FROM shopping"):
+            linked = False
+            for name in filter(None, (x.strip() for x in (s["source"] or "").split(","))):
+                r = row("SELECT id FROM recipes WHERE name = ?", (name,))
+                if r:
+                    DB.execute("INSERT OR IGNORE INTO shopping_recipes VALUES (?, ?)", (s["id"], r["id"]))
+                    linked = True
+            if not linked:
+                DB.execute("UPDATE shopping SET manual=1 WHERE id=?", (s["id"],))
+    DB.execute("CREATE INDEX IF NOT EXISTS idx_shop_list ON shopping(list_id)")
+    DB.execute("UPDATE shopping SET list_id=? WHERE list_id IS NULL", (active_list_id(),))
 
 
 def rows(sql, args=()):
@@ -212,11 +250,34 @@ def bool_int(v):
     return 1 if v in (True, 1, "1", "true", "on") else 0
 
 
+def name_key(name):
+    """Clave para reconocer el mismo producto escrito de otra forma:
+    sin mayúsculas, tildes ni plurales ("Tomates Fritos" == "tomate frito")."""
+    s = unicodedata.normalize("NFD", str(name).lower())
+    s = "".join(c for c in s if unicodedata.category(c) != "Mn")
+    words = []
+    for w in re.findall(r"[a-z0-9]+", s):
+        if len(w) > 4 and w.endswith("es") and w[-3] in "lnrdzj":
+            w = w[:-2]      # limones -> limon, panes -> pan
+        elif len(w) > 3 and w.endswith("s"):
+            w = w[:-1]      # tomates -> tomate, garbanzos -> garbanzo
+        words.append(w)
+    return " ".join(words)
+
+
+def find_product(name):
+    key = name_key(name)
+    for p in rows("SELECT id, name FROM products"):
+        if name_key(p["name"]) == key:
+            return p
+    return None
+
+
 def get_or_create_product(name):
     name = clean_str(name, 120)
     if not name:
         raise ApiError(400, "El nombre no puede estar vacío")
-    p = row("SELECT id FROM products WHERE name = ? COLLATE NOCASE", (name,))
+    p = find_product(name)
     if p:
         return p["id"]
     cur = DB.execute(
@@ -225,7 +286,35 @@ def get_or_create_product(name):
     return cur.lastrowid
 
 
+def active_list_id():
+    r = row("SELECT id FROM shopping_lists WHERE closed_at IS NULL ORDER BY id DESC LIMIT 1")
+    if r:
+        return r["id"]
+    return DB.execute(
+        "INSERT INTO shopping_lists(created_at) VALUES (?)", (int(time.time()),)
+    ).lastrowid
+
+
+SHOPPING_SQL = (
+    "SELECT s.id, s.list_id, s.product_id, s.quantity, s.manual, s.checked, s.created_at, "
+    "COALESCE(p.name, s.name) AS name, p.category AS category "
+    "FROM shopping s LEFT JOIN products p ON p.id = s.product_id WHERE s.list_id = ? "
+)
+
+
 def full_state():
+    lid = active_list_id()
+    shopping = rows(SHOPPING_SQL + "ORDER BY s.checked, s.created_at, s.id", (lid,))
+    links = {}
+    for l in rows("SELECT sr.shopping_id, sr.recipe_id FROM shopping_recipes sr "
+                  "JOIN shopping s ON s.id = sr.shopping_id WHERE s.list_id = ?", (lid,)):
+        links.setdefault(l["shopping_id"], []).append(l["recipe_id"])
+    for s in shopping:
+        s["recipe_ids"] = links.get(s["id"], [])
+    history = rows("SELECT * FROM shopping_lists WHERE closed_at IS NOT NULL "
+                   "ORDER BY closed_at DESC LIMIT 12")
+    for h in history:
+        h["items"] = rows(SHOPPING_SQL + "ORDER BY s.checked DESC, name COLLATE NOCASE", (h["id"],))
     recipes = rows("SELECT * FROM recipes ORDER BY name COLLATE NOCASE")
     ings = rows("SELECT * FROM recipe_ingredients ORDER BY recipe_id, position, id")
     by_recipe = {}
@@ -241,11 +330,9 @@ def full_state():
         "stores": rows("SELECT * FROM stores ORDER BY name COLLATE NOCASE"),
         "prices": rows("SELECT product_id, store_id, price, quality, updated_at FROM prices"),
         "recipes": recipes,
-        "shopping": rows(
-            "SELECT s.*, COALESCE(p.name, s.name) AS name, p.category AS category "
-            "FROM shopping s LEFT JOIN products p ON p.id = s.product_id "
-            "ORDER BY s.checked, s.created_at, s.id"
-        ),
+        "list": row("SELECT * FROM shopping_lists WHERE id=?", (lid,)),
+        "shopping": shopping,
+        "history": history,
     }
 
 
@@ -270,8 +357,9 @@ def product_values(body, partial):
 
 def create_product(body):
     vals = product_values(body, partial=False)
-    if row("SELECT id FROM products WHERE name = ? COLLATE NOCASE", (vals["name"],)):
-        raise ApiError(409, "Ya existe un producto con ese nombre")
+    other = find_product(vals["name"])
+    if other:
+        raise ApiError(409, "Ya existe: «%s»" % other["name"])
     vals["updated_at"] = int(time.time())
     cols = ",".join(vals)
     cur = DB.execute(
@@ -284,9 +372,9 @@ def create_product(body):
 def update_product(pid, body):
     vals = product_values(body, partial=True)
     if "name" in vals:
-        other = row("SELECT id FROM products WHERE name = ? COLLATE NOCASE", (vals["name"],))
+        other = find_product(vals["name"])
         if other and other["id"] != pid:
-            raise ApiError(409, "Ya existe un producto con ese nombre")
+            raise ApiError(409, "Ya existe: «%s»" % other["name"])
     if vals:
         vals["updated_at"] = int(time.time())
         DB.execute(
@@ -296,18 +384,66 @@ def update_product(pid, body):
     return row("SELECT * FROM products WHERE id=?", (pid,))
 
 
-def add_to_shopping(product_id, quantity="", source=""):
-    existing = row(
-        "SELECT * FROM shopping WHERE product_id=? AND checked=0", (product_id,)
-    )
-    if existing:
-        return existing["id"], False
-    name = row("SELECT name FROM products WHERE id=?", (product_id,))["name"]
-    cur = DB.execute(
-        "INSERT INTO shopping(product_id, name, quantity, source, created_at) VALUES (?,?,?,?,?)",
-        (product_id, name, quantity, source, int(time.time())),
-    )
-    return cur.lastrowid, True
+def add_item(product_id, manual, quantity="", recipe_id=None):
+    """Añade un producto a la lista actual. Si ya está, no se duplica: solo se
+    apunta qué receta lo pide (o que también se quiere a mano)."""
+    lid = active_list_id()
+    item = row("SELECT * FROM shopping WHERE list_id=? AND product_id=?", (lid, product_id))
+    added = item is None
+    if added:
+        name = row("SELECT name FROM products WHERE id=?", (product_id,))["name"]
+        sid = DB.execute(
+            "INSERT INTO shopping(list_id, product_id, name, quantity, manual, created_at) "
+            "VALUES (?,?,?,?,?,?)",
+            (lid, product_id, name, quantity, 1 if manual else 0, int(time.time())),
+        ).lastrowid
+    else:
+        sid = item["id"]
+        if manual:
+            DB.execute(
+                "UPDATE shopping SET manual=1, quantity=CASE WHEN ?<>'' THEN ? ELSE quantity END "
+                "WHERE id=?", (quantity, quantity, sid))
+    if recipe_id:
+        DB.execute("INSERT OR IGNORE INTO shopping_recipes(shopping_id, recipe_id) VALUES (?,?)",
+                   (sid, recipe_id))
+    return sid, added
+
+
+def sync_recipe(rid):
+    """Pone en la lista los ingredientes de la receta que no tenéis en casa."""
+    added = 0
+    for i in rows("SELECT ri.product_id FROM recipe_ingredients ri "
+                  "JOIN products p ON p.id = ri.product_id "
+                  "WHERE ri.recipe_id=? AND p.in_stock=0", (rid,)):
+        added += add_item(i["product_id"], manual=False, recipe_id=rid)[1]
+    return added
+
+
+def unsync_recipe(rid):
+    """Quita de la lista lo que solo estaba por esta receta (y no está ya en el carro)."""
+    lid = active_list_id()
+    DB.execute("DELETE FROM shopping_recipes WHERE recipe_id=? AND shopping_id IN "
+               "(SELECT id FROM shopping WHERE list_id=?)", (rid, lid))
+    return DB.execute(
+        "DELETE FROM shopping WHERE list_id=? AND manual=0 AND checked=0 "
+        "AND id NOT IN (SELECT shopping_id FROM shopping_recipes)", (lid,)).rowcount
+
+
+def set_planned(rid, body):
+    r = row("SELECT planned FROM recipes WHERE id=?", (rid,))
+    if not r:
+        raise ApiError(404, "Receta no encontrada")
+    planned = bool_int(body.get("planned"))
+    DB.execute("UPDATE recipes SET planned=? WHERE id=?", (planned, rid))
+    if planned:
+        return {"added": sync_recipe(rid), "removed": 0}
+    return {"added": 0, "removed": unsync_recipe(rid)}
+
+
+def delete_recipe(rid):
+    unsync_recipe(rid)
+    DB.execute("DELETE FROM recipes WHERE id=?", (rid,))
+    return {"ok": True}
 
 
 def mark_out(pid, body):
@@ -316,7 +452,7 @@ def mark_out(pid, body):
     DB.execute("UPDATE products SET in_stock=0, updated_at=? WHERE id=?", (int(time.time()), pid))
     added = False
     if body.get("add_to_list", True):
-        _, added = add_to_shopping(pid)
+        _, added = add_item(pid, manual=True)
     return {"ok": True, "added": added}
 
 
@@ -362,49 +498,26 @@ def save_recipe(rid, body):
                 "INSERT INTO recipe_ingredients(recipe_id, product_id, quantity, position) VALUES (?,?,?,?)",
                 (rid, pid, clean_str(ing.get("quantity"), 60), pos),
             )
+        # Si la receta ya está en la semana, la lista se ajusta a los ingredientes nuevos.
+        if row("SELECT planned FROM recipes WHERE id=?", (rid,))["planned"]:
+            unsync_recipe(rid)
+            sync_recipe(rid)
     return {"id": rid}
 
 
-def planned_needs():
-    """Ingredientes de las recetas planificadas agrupados por producto."""
-    data = rows(
-        "SELECT ri.product_id, ri.quantity, r.name AS recipe, p.in_stock, p.staple "
-        "FROM recipe_ingredients ri "
-        "JOIN recipes r ON r.id = ri.recipe_id AND r.planned = 1 "
-        "JOIN products p ON p.id = ri.product_id "
-        "ORDER BY r.name, ri.position"
-    )
-    needs = {}
-    for d in data:
-        n = needs.setdefault(
-            d["product_id"],
-            {"product_id": d["product_id"], "in_stock": d["in_stock"], "staple": d["staple"],
-             "quantities": [], "recipes": []},
-        )
-        if d["quantity"]:
-            n["quantities"].append(d["quantity"])
-        n["recipes"].append(d["recipe"])
-    return list(needs.values())
+def planned_ids():
+    return [r["id"] for r in rows("SELECT id FROM recipes WHERE planned=1")]
 
 
 def generate_list(_body):
-    added = updated = 0
-    for n in planned_needs():
-        if n["in_stock"]:
-            continue
-        qty = " + ".join(n["quantities"])
-        source = ", ".join(n["recipes"])
-        existing = row("SELECT * FROM shopping WHERE product_id=? AND checked=0", (n["product_id"],))
-        if existing:
-            DB.execute(
-                "UPDATE shopping SET source=?, quantity=CASE WHEN ?<>'' THEN ? ELSE quantity END WHERE id=?",
-                (source, qty, qty, existing["id"]),
-            )
-            updated += 1
-        else:
-            add_to_shopping(n["product_id"], qty, source)
-            added += 1
-    return {"added": added, "updated": updated}
+    return {"added": sum(sync_recipe(rid) for rid in planned_ids())}
+
+
+def clear_plan(_body):
+    for rid in planned_ids():
+        unsync_recipe(rid)
+    DB.execute("UPDATE recipes SET planned=0")
+    return {"ok": True}
 
 
 def mark_cooked(body):
@@ -421,16 +534,52 @@ def mark_cooked(body):
     return {"recipes": cur.rowcount, "consumed": len(consume)}
 
 
-def finish_shopping(_body):
-    checked = rows("SELECT * FROM shopping WHERE checked=1")
+HISTORY_KEEP = 30
+
+
+def finish_shopping(body):
+    """Cierra la compra actual: lo marcado pasa a la despensa, la lista queda en
+    el historial y se empieza una nueva. Lo no comprado se pasa a la nueva lista
+    o se descarta, según se elija (así no se acumulan cosas de semana en semana)."""
+    lid = active_list_id()
+    checked = rows("SELECT * FROM shopping WHERE list_id=? AND checked=1", (lid,))
+    pending = rows("SELECT id FROM shopping WHERE list_id=? AND checked=0", (lid,))
+    if not checked and not pending:
+        raise ApiError(400, "La lista está vacía")
     now = int(time.time())
     for s in checked:
         if s["product_id"]:
-            DB.execute(
-                "UPDATE products SET in_stock=1, updated_at=? WHERE id=?", (now, s["product_id"])
-            )
-    DB.execute("DELETE FROM shopping WHERE checked=1")
-    return {"stocked": len(checked)}
+            DB.execute("UPDATE products SET in_stock=1, updated_at=? WHERE id=?", (now, s["product_id"]))
+    carry = bool(body.get("carry_over"))
+    DB.execute("UPDATE shopping_lists SET closed_at=? WHERE id=?", (now, lid))
+    new_lid = active_list_id()
+    if carry:
+        DB.execute("UPDATE shopping SET list_id=? WHERE list_id=? AND checked=0", (new_lid, lid))
+    if not checked and carry:
+        DB.execute("DELETE FROM shopping_lists WHERE id=?", (lid,))  # nada que archivar
+    old = rows("SELECT id FROM shopping_lists WHERE closed_at IS NOT NULL "
+               "ORDER BY closed_at DESC LIMIT -1 OFFSET ?", (HISTORY_KEEP,))
+    for o in old:
+        DB.execute("DELETE FROM shopping_lists WHERE id=?", (o["id"],))
+    return {"stocked": len(checked), "carried": len(pending) if carry else 0,
+            "dropped": 0 if carry else len(pending)}
+
+
+def have_item(sid):
+    """"Esto ya lo tenemos": se quita de la lista y queda marcado en la despensa."""
+    s = row("SELECT product_id FROM shopping WHERE id=?", (sid,))
+    if not s:
+        raise ApiError(404, "No está en la lista")
+    if s["product_id"]:
+        DB.execute("UPDATE products SET in_stock=1, updated_at=? WHERE id=?",
+                   (int(time.time()), s["product_id"]))
+    DB.execute("DELETE FROM shopping WHERE id=?", (sid,))
+    return {"ok": True}
+
+
+def delete_history(list_id):
+    DB.execute("DELETE FROM shopping_lists WHERE id=? AND closed_at IS NOT NULL", (list_id,))
+    return {"ok": True}
 
 
 def put_price(body):
@@ -494,9 +643,7 @@ def patch_shopping(sid, body):
 
 def create_shopping(body):
     pid = get_or_create_product(body.get("name"))
-    sid, added = add_to_shopping(pid, clean_str(body.get("quantity"), 60))
-    if not added and body.get("quantity"):
-        DB.execute("UPDATE shopping SET quantity=? WHERE id=?", (clean_str(body["quantity"], 60), sid))
+    sid, added = add_item(pid, manual=True, quantity=clean_str(body.get("quantity"), 60))
     return {"id": sid, "added": added}
 
 
@@ -526,24 +673,23 @@ ROUTES = [
 
     ("POST", r"/api/recipes", lambda m, b: save_recipe(None, b), True),
     ("PUT", r"/api/recipes/(\d+)", lambda m, b: save_recipe(_id(m), b), True),
-    ("PATCH", r"/api/recipes/(\d+)",
-     lambda m, b: DB.execute("UPDATE recipes SET planned=? WHERE id=?",
-                             (bool_int(b.get("planned")), _id(m))) and {"ok": True}, True),
-    ("DELETE", r"/api/recipes/(\d+)",
-     lambda m, b: DB.execute("DELETE FROM recipes WHERE id=?", (_id(m),)) and {"ok": True}, True),
+    ("PATCH", r"/api/recipes/(\d+)", lambda m, b: set_planned(_id(m), b), True),
+    ("DELETE", r"/api/recipes/(\d+)", lambda m, b: delete_recipe(_id(m)), True),
 
     ("POST", r"/api/plan/generate-list", lambda m, b: generate_list(b), True),
     ("POST", r"/api/plan/cooked", lambda m, b: mark_cooked(b), True),
-    ("POST", r"/api/plan/clear",
-     lambda m, b: DB.execute("UPDATE recipes SET planned=0") and {"ok": True}, True),
+    ("POST", r"/api/plan/clear", lambda m, b: clear_plan(b), True),
 
     ("POST", r"/api/shopping", lambda m, b: create_shopping(b), True),
     ("PATCH", r"/api/shopping/(\d+)", lambda m, b: patch_shopping(_id(m), b), True),
     ("DELETE", r"/api/shopping/(\d+)",
      lambda m, b: DB.execute("DELETE FROM shopping WHERE id=?", (_id(m),)) and {"ok": True}, True),
+    ("POST", r"/api/shopping/(\d+)/have", lambda m, b: have_item(_id(m)), True),
     ("POST", r"/api/shopping/finish", lambda m, b: finish_shopping(b), True),
     ("POST", r"/api/shopping/clear",
-     lambda m, b: DB.execute("DELETE FROM shopping") and {"ok": True}, True),
+     lambda m, b: DB.execute("DELETE FROM shopping WHERE list_id=?", (active_list_id(),))
+     and {"ok": True}, True),
+    ("DELETE", r"/api/history/(\d+)", lambda m, b: delete_history(_id(m)), True),
 ]
 ROUTES = [(meth, re.compile("^" + pat + "$"), fn, mut) for meth, pat, fn, mut in ROUTES]
 
@@ -668,7 +814,7 @@ class Handler(BaseHTTPRequestHandler):
             with DB_LOCK:
                 try:
                     result = fn(m, body)
-                    if mutates:
+                    if mutates or DB.in_transaction:  # una lectura puede crear la lista actual
                         DB.commit()
                 except Exception:
                     DB.rollback()

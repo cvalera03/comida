@@ -84,6 +84,12 @@ a { color: var(--accent); }
 .row .title { font-weight: 500; overflow-wrap: anywhere; }
 .row .meta { color: var(--muted); font-size: 13px; margin-top: 1px; overflow-wrap: anywhere; }
 .row .end { color: var(--muted); font-size: 14px; text-align: right; flex: none; }
+.row-btn {
+  width: 34px; height: 34px; border-radius: 50%; border: 0; flex: none; cursor: pointer;
+  background: var(--card-2); color: var(--muted); font-size: 18px; line-height: 1; display: grid; place-items: center;
+}
+.row-btn.danger { color: var(--danger); font-size: 22px; }
+.row .main + .row-btn { margin-left: auto; }
 .chev { width: 8px; height: 13px; stroke: var(--muted); fill: none; stroke-width: 2; flex: none; opacity: .6; }
 
 .empty { text-align: center; color: var(--muted); padding: 28px 20px; }
