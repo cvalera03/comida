@@ -1,11 +1,11 @@
 # ZimaOS → App Store → "+" (arriba a la derecha) → Instalar una app personalizada → Importar.
 # Pega este fichero. Antes cambia:
-#   1. TU_USUARIO_GITHUB por tu usuario (la imagen la publica el workflow de GitHub Actions)
+#   1. IP-DEL-ZIMAOS (abajo, en "icon") por la IP de tu ZimaOS
 #   2. APP_PASSWORD por la contraseña que usaréis los dos
 name: comida
 services:
   comida:
-    image: ghcr.io/TU_USUARIO_GITHUB/comida:latest
+    image: ghcr.io/cvalera03/comida:latest
     container_name: comida
     restart: unless-stopped
     ports:
@@ -57,7 +57,7 @@ x-casaos:
   description:
     en_us: Recipes, weekly plan, shopping list, pantry and supermarket price comparison.
     es_es: Recetas, plan semanal, lista de la compra, despensa y comparador de precios.
-  icon: https://raw.githubusercontent.com/TU_USUARIO_GITHUB/comida/main/public/icons/icon-512.png
+  icon: http://IP-DEL-ZIMAOS:8420/icons/icon-512.png
   index: /
   port_map: "8420"
   scheme: http
