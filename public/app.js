@@ -16,11 +16,9 @@ const store = {
   set(k, v) { try { localStorage.setItem('comida.' + k, JSON.stringify(v)); } catch { /* modo privado */ } },
 };
 
-const CATEGORIES = ['Frutas y verduras', 'Carne', 'Pescado', 'Lácteos y huevos', 'Panadería', 'Despensa',
-  'Especias', 'Conservas', 'Congelados', 'Bebidas', 'Limpieza', 'Otros'];
-
 const ICON = {
   plus: '<svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>',
+  tag: '<svg viewBox="0 0 24 24"><path d="M3 12V4a1 1 0 0 1 1-1h8l9 9-9 9z"/><circle cx="7.5" cy="7.5" r="1.3"/></svg>',
   history: '<svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5M12 7v5l3 2"/></svg>',
   store: '<svg viewBox="0 0 24 24"><path d="M4 10v10h16V10M3 10l2-6h14l2 6zM9 20v-6h6v6"/></svg>',
   check: '<svg viewBox="0 0 24 24"><path d="m5 12 5 5 9-10"/></svg>',
@@ -53,8 +51,9 @@ function index() {
   const recipes = new Map(d.recipes.map((r) => [r.id, r]));
   const usedIn = {};
   for (const r of d.recipes) for (const i of r.ingredients) (usedIn[i.product_id] ||= []).push(r);
-  const categories = [...new Set([...CATEGORIES, ...d.products.map((p) => p.category).filter(Boolean)])];
-  IDX = { products, stores, prices, shoppingByProduct, usedIn, categories, recipes };
+  const categories = (d.categories || []).map((c) => c.name);
+  const catPos = new Map(categories.map((c, i) => [c.toLowerCase(), i]));
+  IDX = { products, stores, prices, shoppingByProduct, usedIn, categories, catPos, recipes };
 }
 
 function bestPrice(pid) {
@@ -208,7 +207,7 @@ function groupBy(list, keyFn) {
   for (const x of list) { const k = keyFn(x); if (!m.has(k)) m.set(k, []); m.get(k).push(x); }
   return [...m.entries()].sort((a, b) => catOrder(a[0]) - catOrder(b[0]) || a[0].localeCompare(b[0]));
 }
-function catOrder(c) { if (!c) return 999; const i = CATEGORIES.indexOf(c); return i < 0 ? 500 : i; }
+function catOrder(c) { if (!c) return 999; return IDX.catPos.get(c.toLowerCase()) ?? 500; }
 
 // ---------------------------------------------------------------- semana ---
 function plannedNeeds() {
@@ -320,12 +319,7 @@ function viewCompra() {
     est.priced ? `desde ${eur(est.total)}` : ''].filter(Boolean).join(' · '),
     S.data.history.length ? `<button class="icon-btn ghost" data-act="history" aria-label="Compras anteriores">${ICON.history}</button>` : '');
 
-  h += `<form class="card pad" data-form="add-shopping" autocomplete="off">
-    <div class="ing-row" style="grid-template-columns:1fr 90px auto;margin:0">
-      <input class="input" name="name" list="dl-products" placeholder="Añadir producto" required>
-      <input class="input" name="quantity" placeholder="Cant.">
-      <button class="icon-btn" aria-label="Añadir">${ICON.plus}</button>
-    </div>${datalistProducts()}</form>`;
+  h += `<button class="btn primary block" data-act="picker">${ICON.plus.replace('<svg', '<svg width="20" height="20" style="stroke:currentColor;stroke-width:2.6;fill:none;stroke-linecap:round"')} Añadir productos</button>`;
 
   if (!S.data.shopping.length) {
     h += `<div class="spacer"></div>` + empty('Nada que comprar', 'Marca recetas en «Semana» y sus ingredientes aparecerán aquí solos. También podéis añadir cosas a mano o desde la despensa.');
@@ -377,7 +371,8 @@ function viewDespensa() {
   const have = S.data.products.filter((p) => p.in_stock).length;
   const seg = [['todo', 'Todo'], ['tengo', 'Tengo'], ['falta', 'Falta'], ['basicos', 'Especias y básicos']];
   return header('Despensa', `${have} de ${S.data.products.length} en casa`,
-    `<button class="icon-btn" data-act="new-product" aria-label="Nuevo producto">${ICON.plus}</button>`)
+    `<div style="display:flex;gap:8px"><button class="icon-btn ghost" data-act="categories" aria-label="Categorías">${ICON.tag}</button>
+    <button class="icon-btn" data-act="new-product" aria-label="Nuevo producto">${ICON.plus}</button></div>`)
     + `<input id="q-despensa" class="search" type="search" placeholder="Buscar producto" value="${esc(S.ui.qDespensa)}" data-input="q-despensa" autocomplete="off">`
     + `<div class="segmented">${seg.map(([k, l]) => `<button data-act="f-despensa" data-f="${k}" class="${S.ui.fDespensa === k ? 'on' : ''}">${l}</button>`).join('')}</div>`
     + `<div id="list-area">${despensaList()}</div>`;
@@ -614,17 +609,19 @@ function openProduct(id) {
     <form id="product-form" data-form="product" data-id="${p ? p.id : ''}" autocomplete="off">
       <label class="field"><span>Nombre</span><input name="name" required value="${esc(p?.name)}" placeholder="Garbanzos cocidos"></label>
       <div class="grid2">
-        <label class="field"><span>Categoría</span><input name="category" list="dl-cats" value="${esc(p?.category)}" placeholder="Despensa"></label>
+        <label class="field"><span>Categoría</span>${categorySelect(p?.category)}</label>
         <label class="field"><span>Unidad / formato</span><input name="unit" value="${esc(p?.unit)}" placeholder="bote 400 g"></label>
       </div>
-      <datalist id="dl-cats">${IDX.categories.map((c) => `<option value="${esc(c)}">`).join('')}</datalist>
       <div class="card">
         <div class="switch-row"><div>Lo tenemos en casa</div><label class="switch"><input type="checkbox" name="in_stock" ${p?.in_stock ? 'checked' : ''}><i></i></label></div>
         <div class="switch-row"><div>Básico / especia<small>No se gasta al cocinar; avisad vosotros cuando se acabe</small></div><label class="switch"><input type="checkbox" name="staple" ${p?.staple ? 'checked' : ''}><i></i></label></div>
       </div>
       <div class="spacer"></div>
       <label class="field"><span>Notas</span><textarea name="notes" style="min-height:60px" placeholder="Marca preferida, dónde está…">${esc(p?.notes)}</textarea></label>
-      ${p ? '' : '<button class="btn primary block" type="submit">Crear producto</button>'}
+      ${p ? '' : `${S.data.stores.length ? `<div class="section-title">Precio y calidad por supermercado</div>
+        <div class="card">${S.data.stores.map((s) => priceRow(null, s, null)).join('')}</div>
+        <p class="hint">Opcional. Deja vacío el precio de los súper donde no lo compréis.</p><div class="spacer"></div>` : ''}
+        <button class="btn primary block" type="submit">Crear producto</button>`}
     </form>
     ${p ? `
       <div class="section-title">Precio por ${esc(p.unit || 'unidad')} y calidad<button class="btn small link" data-act="stores">Supermercados</button></div>
@@ -637,12 +634,29 @@ function openProduct(id) {
       <div class="btn-row"><button class="btn danger" data-act="delete-product" data-id="${p.id}">Eliminar producto</button></div>` : ''}`;
   openSheet(html, { kind: 'product', id });
 }
+// p = null: producto nuevo; los valores van en el formulario y se guardan al crear.
 function priceRow(p, s, best) {
-  const pr = IDX.prices[p.id]?.[s.id] || {};
+  const pr = (p && IDX.prices[p.id]?.[s.id]) || {};
   const isBest = best && best.store_id === s.id;
+  const star = (n) => p
+    ? `data-act="set-quality" data-p="${p.id}" data-s="${s.id}" data-q="${n}"`
+    : `data-act="form-quality" data-s="${s.id}" data-q="${n}"`;
+  const input = p
+    ? `data-change="set-price" data-p="${p.id}" data-s="${s.id}"`
+    : `name="price-${s.id}"`;
   return `<div class="price-row"><div><div class="store">${esc(s.name)} ${isBest ? '<span class="pill ok">Más barato</span>' : ''}</div>
-    <div class="stars" role="group" aria-label="Calidad en ${esc(s.name)}">${[1, 2, 3, 4, 5].map((n) => `<button type="button" class="${pr.quality >= n ? 'on' : ''}" data-act="set-quality" data-p="${p.id}" data-s="${s.id}" data-q="${n}" aria-label="${n} estrellas">★</button>`).join('')}</div></div>
-    <input class="input num" inputmode="decimal" placeholder="€" value="${pr.price != null ? String(pr.price).replace('.', ',') : ''}" data-change="set-price" data-p="${p.id}" data-s="${s.id}"></div>`;
+    <div class="stars" role="group" aria-label="Calidad en ${esc(s.name)}">${[1, 2, 3, 4, 5].map((n) => `<button type="button" class="${pr.quality >= n ? 'on' : ''}" ${star(n)} aria-label="${n} estrellas">★</button>`).join('')}</div>
+    ${p ? '' : `<input type="hidden" name="quality-${s.id}" value="">`}</div>
+    <input class="input num" inputmode="decimal" placeholder="€" value="${pr.price != null ? String(pr.price).replace('.', ',') : ''}" ${input}></div>`;
+}
+
+function categorySelect(current) {
+  const cats = [...IDX.categories];
+  if (current && !cats.some((c) => c.toLowerCase() === current.toLowerCase())) cats.push(current);
+  return `<select name="category" data-change="category-select" data-prev="${esc(current || '')}">
+    <option value="">Sin categoría</option>
+    ${cats.map((c) => `<option ${c === current ? 'selected' : ''}>${esc(c)}</option>`).join('')}
+    <option value="__new__">＋ Nueva categoría…</option></select>`;
 }
 
 async function saveProduct(form) {
@@ -651,6 +665,16 @@ async function saveProduct(form) {
     name: fd.get('name'), category: fd.get('category'), unit: fd.get('unit'), notes: fd.get('notes'),
     in_stock: fd.get('in_stock') === 'on', staple: fd.get('staple') === 'on',
   };
+  if (!form.dataset.id) {
+    body.prices = [];
+    for (const st of S.data.stores) {
+      const raw = String(fd.get(`price-${st.id}`) || '').trim();
+      const quality = Number(fd.get(`quality-${st.id}`)) || null;
+      const price = raw ? parseNum(raw) : null;
+      if (raw && price == null) return toast(`Precio no válido en ${st.name}`);
+      if (price != null || quality) body.prices.push({ store_id: st.id, price, quality });
+    }
+  }
   if (!body.name.trim()) return toast('Ponle un nombre');
   const id = form.dataset.id ? Number(form.dataset.id) : null;
   if (id) {
@@ -658,14 +682,61 @@ async function saveProduct(form) {
     closeSheet();
     toast('Guardado');
   } else {
-    const p = await api('POST', '/api/products', body);
-    await loadState();
-    openProduct(p.id);
-    toast('Creado. Ahora puedes añadir precios.');
+    await api('POST', '/api/products', body);
+    closeSheet();
+    toast(`${body.name.trim()} creado`);
   }
 }
 
 // Supermercados
+// Elegir productos para la compra: tocar añade o quita; si no existe, se crea.
+function openPicker() {
+  const html = sheetHead('Añadir a la compra', 'Listo') + `
+    <input id="q-picker" class="search" type="search" placeholder="Buscar o escribir un producto nuevo" data-input="q-picker" autocomplete="off" value="${esc(S.ui.qPicker || '')}">
+    <div id="picker-list">${pickerList()}</div>`;
+  openSheet(html, { kind: 'picker', live: () => { const el = $('#picker-list'); if (el) el.innerHTML = pickerList(); } });
+}
+
+function pickerList() {
+  const q = S.ui.qPicker || '';
+  const nq = norm(q.trim());
+  const list = S.data.products.filter((p) => !nq || norm(p.name).includes(nq) || norm(p.category).includes(nq));
+  const exact = nq && S.data.products.some((p) => norm(p.name) === nq);
+  const create = nq && !exact
+    ? `<div class="section-title">¿No está?</div><div class="card"><button class="row" data-act="picker-new"><span class="check" style="border-style:dashed">${ICON.check}</span>
+      <span class="main"><div class="title">Crear «${esc(q.trim())}»</div><div class="meta">Producto nuevo, se añade a la despensa y a la compra</div></span></button></div>`
+    : '';
+  if (!list.length) return create || empty('Sin productos', 'Escribe el nombre de un producto para crearlo.');
+  let h = '';
+  for (const [cat, items] of groupBy(list, (p) => p.category || '')) {
+    h += `<div class="section-title">${esc(cat || 'Sin categoría')}</div><div class="card"><div class="list">${items.map((p) => {
+      const inList = IDX.shoppingByProduct.get(p.id);
+      const b = bestPrice(p.id);
+      const meta = [p.in_stock ? 'En casa' : 'Falta', b ? `${eur(b.price)} en ${b.store}` : ''].filter(Boolean).join(' · ');
+      return `<button class="row" data-act="picker-toggle" data-id="${p.id}">
+        <span class="check ${inList ? 'on' : ''}">${ICON.check}</span>
+        <span class="main"><div class="title">${esc(p.name)}</div><div class="meta">${esc(meta)}</div></span></button>`;
+    }).join('')}</div></div>`;
+  }
+  return h + create;
+}
+
+function openCategories() {
+  const counts = {};
+  for (const p of S.data.products) if (p.category) counts[p.category.toLowerCase()] = (counts[p.category.toLowerCase()] || 0) + 1;
+  const html = sheetHead('Categorías', 'Listo') + `
+    <div class="card">${S.data.categories.map((c) => `<div class="price-row" style="grid-template-columns:1fr auto auto">
+      <input class="input" style="text-align:left" value="${esc(c.name)}" data-change="rename-category" data-id="${c.id}" aria-label="Nombre">
+      <span class="small muted num">${counts[c.name.toLowerCase()] || 0}</span>
+      <button class="btn small danger" data-act="delete-category" data-id="${c.id}" data-n="${counts[c.name.toLowerCase()] || 0}">Borrar</button></div>`).join('') || '<div class="empty">Ninguna todavía</div>'}</div>
+    <p class="hint">El número indica cuántos productos hay en cada una. Al renombrar, se cambia en todos sus productos.</p>
+    <div class="spacer"></div>
+    <form data-form="add-category" class="ing-row" style="grid-template-columns:1fr auto" autocomplete="off">
+      <input class="input" name="name" placeholder="Nueva categoría" required>
+      <button class="btn primary small">Añadir</button></form>`;
+  openSheet(html, { kind: 'categories', live: () => { if (!$('#sheet').contains(document.activeElement)) openCategories(); } });
+}
+
 function openStores() {
   const html = sheetHead('Supermercados', 'Listo') + `
     <div class="card">${S.data.stores.map((s) => `<div class="price-row" style="grid-template-columns:1fr auto">
@@ -862,6 +933,35 @@ const ACTIONS = {
   },
 
   'stores': () => openStores(),
+  'categories': () => openCategories(),
+  'delete-category': async (t) => {
+    const n = Number(t.dataset.n);
+    if (!confirm(n ? `${plural(n, 'producto quedará', 'productos quedarán')} sin categoría. ¿Borrar?` : '¿Borrar esta categoría?')) return;
+    await api('DELETE', `/api/categories/${t.dataset.id}`);
+  },
+  'picker': () => { S.ui.qPicker = ''; openPicker(); setTimeout(() => $('#q-picker')?.focus(), 50); },
+  'picker-toggle': async (t) => {
+    const id = Number(t.dataset.id);
+    const item = IDX.shoppingByProduct.get(id);
+    t.querySelector('.check').classList.toggle('on', !item);
+    if (item) await api('DELETE', `/api/shopping/${item.id}`);
+    else await api('POST', '/api/shopping', { name: IDX.products.get(id).name });
+  },
+  'picker-new': async () => {
+    const name = (S.ui.qPicker || '').trim();
+    if (!name) return;
+    await api('POST', '/api/shopping', { name });
+    S.ui.qPicker = '';
+    const q = $('#q-picker'); if (q) { q.value = ''; q.focus(); }
+    toast(`${name}: creado y añadido`);
+  },
+  'form-quality': (t) => {
+    const row = t.closest('.price-row');
+    const hidden = row.querySelector('input[type=hidden]');
+    const q = Number(t.dataset.q) === Number(hidden.value) ? '' : t.dataset.q;
+    hidden.value = q;
+    row.querySelectorAll('.stars button').forEach((b) => b.classList.toggle('on', q && Number(b.dataset.q) <= Number(q)));
+  },
   'delete-store': async (t) => {
     if (!confirm('¿Borrar este supermercado y sus precios?')) return;
     await api('DELETE', `/api/stores/${t.dataset.id}`);
@@ -880,22 +980,36 @@ const CHANGES = {
     await api('PUT', '/api/prices', { product_id: pid, store_id: sid, price, quality: cur.quality ?? null });
     toast('Precio guardado');
   },
+  'category-select': async (t) => {
+    if (t.value !== '__new__') { t.dataset.prev = t.value; return; }
+    const name = (prompt('Nombre de la nueva categoría') || '').trim();
+    if (!name) { t.value = t.dataset.prev || ''; return; }
+    try {
+      await api('POST', '/api/categories', { name });
+    } catch { t.value = t.dataset.prev || ''; return; }
+    const opt = document.createElement('option');
+    opt.textContent = name;
+    t.insertBefore(opt, t.querySelector('option[value="__new__"]'));
+    t.value = name; t.dataset.prev = name;
+  },
+  'rename-category': (t) => { if (t.value.trim()) api('PATCH', `/api/categories/${t.dataset.id}`, { name: t.value }); },
   'rename-store': (t) => { if (t.value.trim()) api('PATCH', `/api/stores/${t.dataset.id}`, { name: t.value }); },
   'opt-weight': (t) => { S.ui.opt.qWeight = Number(t.value) / 100; store.set('opt', S.ui.opt); render(); },
 };
 
 const INPUTS = {
   'q-recetas': (t) => { S.ui.qRecetas = t.value; $('#list-area').innerHTML = recetasList(); },
+  'q-picker': (t) => { S.ui.qPicker = t.value; $('#picker-list').innerHTML = pickerList(); },
   'q-despensa': (t) => { S.ui.qDespensa = t.value; $('#list-area').innerHTML = despensaList(); },
 };
 
 const FORMS = {
   'recipe': (f) => saveRecipe(f),
   'product': (f) => saveProduct(f),
-  'add-shopping': async (f) => {
-    const fd = new FormData(f);
-    await api('POST', '/api/shopping', { name: fd.get('name'), quantity: fd.get('quantity') });
-    f.reset(); f.querySelector('input').focus();
+  'add-category': async (f) => {
+    await api('POST', '/api/categories', { name: new FormData(f).get('name') });
+    await loadState(); openCategories();
+    $('#sheet input[name="name"]')?.focus();
   },
   'add-store': async (f) => {
     await api('POST', '/api/stores', { name: new FormData(f).get('name') });

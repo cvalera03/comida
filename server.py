@@ -120,6 +120,11 @@ CREATE TABLE IF NOT EXISTS recipe_ingredients(
   quantity TEXT NOT NULL DEFAULT '',
   position INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS categories(
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  position INTEGER NOT NULL DEFAULT 0
+);
 -- Cada compra es una lista: la abierta es la actual, las cerradas son el historial.
 CREATE TABLE IF NOT EXISTS shopping_lists(
   id INTEGER PRIMARY KEY,
@@ -148,6 +153,8 @@ CREATE INDEX IF NOT EXISTS idx_shop_product ON shopping(product_id);
 """
 
 SEED_STORES = ["Mercadona", "Lidl", "Carrefour"]
+SEED_CATEGORIES = ["Frutas y verduras", "Carne", "Pescado", "Lácteos y huevos", "Panadería",
+                   "Despensa", "Especias", "Conservas", "Congelados", "Bebidas", "Limpieza", "Otros"]
 SEED_STAPLES = [
     ("Sal", "Especias"), ("Pimienta negra", "Especias"), ("Pimentón", "Especias"),
     ("Comino", "Especias"), ("Orégano", "Especias"), ("Ajo en polvo", "Especias"),
@@ -198,6 +205,12 @@ def migrate():
                     linked = True
             if not linked:
                 DB.execute("UPDATE shopping SET manual=1 WHERE id=?", (s["id"],))
+    if not row("SELECT id FROM categories LIMIT 1"):
+        for i, name in enumerate(SEED_CATEGORIES):
+            DB.execute("INSERT INTO categories(name, position) VALUES (?, ?)", (name, i))
+        for p in rows("SELECT DISTINCT category FROM products WHERE category <> ''"):
+            DB.execute("UPDATE products SET category=? WHERE category=?",
+                       (canonical_category(p["category"]), p["category"]))
     DB.execute("CREATE INDEX IF NOT EXISTS idx_shop_list ON shopping(list_id)")
     DB.execute("UPDATE shopping SET list_id=? WHERE list_id IS NULL", (active_list_id(),))
 
@@ -250,25 +263,32 @@ def bool_int(v):
     return 1 if v in (True, 1, "1", "true", "on") else 0
 
 
-def name_key(name):
-    """Clave para reconocer el mismo producto escrito de otra forma:
-    sin mayúsculas, tildes ni plurales ("Tomates Fritos" == "tomate frito")."""
+def _words(name):
     s = unicodedata.normalize("NFD", str(name).lower())
     s = "".join(c for c in s if unicodedata.category(c) != "Mn")
-    words = []
-    for w in re.findall(r"[a-z0-9]+", s):
-        if len(w) > 4 and w.endswith("es") and w[-3] in "lnrdzj":
-            w = w[:-2]      # limones -> limon, panes -> pan
-        elif len(w) > 3 and w.endswith("s"):
-            w = w[:-1]      # tomates -> tomate, garbanzos -> garbanzo
-        words.append(w)
-    return " ".join(words)
+    return re.findall(r"[a-z0-9]+", s)
+
+
+def _forms(w):
+    """Formas posibles de una palabra en singular: tomates -> tomate, limones -> limon."""
+    forms = {w}
+    if len(w) > 3 and w.endswith("s"):
+        forms.add(w[:-1])
+        if len(w) > 4 and w.endswith("es"):
+            forms.add(w[:-2])
+    return forms
+
+
+def same_name(a, b):
+    """¿Es el mismo nombre sin contar mayúsculas, tildes ni plurales?
+    ("Tomates Fritos" == "tomate frito", "carnes" == "Carne", "limones" == "Limón")."""
+    wa, wb = _words(a), _words(b)
+    return len(wa) == len(wb) and all(_forms(x) & _forms(y) for x, y in zip(wa, wb))
 
 
 def find_product(name):
-    key = name_key(name)
     for p in rows("SELECT id, name FROM products"):
-        if name_key(p["name"]) == key:
+        if same_name(p["name"], name):
             return p
     return None
 
@@ -328,6 +348,7 @@ def full_state():
         "version": VERSION,
         "products": rows("SELECT * FROM products ORDER BY name COLLATE NOCASE"),
         "stores": rows("SELECT * FROM stores ORDER BY name COLLATE NOCASE"),
+        "categories": rows("SELECT * FROM categories ORDER BY position, name COLLATE NOCASE"),
         "prices": rows("SELECT product_id, store_id, price, quality, updated_at FROM prices"),
         "recipes": recipes,
         "list": row("SELECT * FROM shopping_lists WHERE id=?", (lid,)),
@@ -348,6 +369,8 @@ def product_values(body, partial):
             vals[k] = bool_int(body[k])
         else:
             vals[k] = clean_str(body[k], 120 if k != "notes" else 2000)
+    if vals.get("category"):
+        vals["category"] = canonical_category(vals["category"])
     if "name" in vals and not vals["name"]:
         raise ApiError(400, "El nombre no puede estar vacío")
     if not partial and "name" not in vals:
@@ -366,6 +389,10 @@ def create_product(body):
         "INSERT INTO products(%s) VALUES (%s)" % (cols, ",".join("?" * len(vals))),
         list(vals.values()),
     )
+    # Precios y calidad se pueden dar ya al crear el producto.
+    for pr in body.get("prices") or []:
+        if isinstance(pr, dict):
+            put_price(dict(pr, product_id=cur.lastrowid))
     return row("SELECT * FROM products WHERE id=?", (cur.lastrowid,))
 
 
@@ -610,6 +637,58 @@ def put_price(body):
     return {"ok": True}
 
 
+def find_category(name):
+    for c in rows("SELECT * FROM categories ORDER BY position"):
+        if same_name(c["name"], name):
+            return c
+    return None
+
+
+def canonical_category(name):
+    """Devuelve la categoría existente equivalente o la crea (así no hay variantes)."""
+    name = clean_str(name, 60)
+    c = find_category(name)
+    if c:
+        return c["name"]
+    pos = row("SELECT COALESCE(MAX(position), -1) + 1 AS p FROM categories")["p"]
+    DB.execute("INSERT INTO categories(name, position) VALUES (?, ?)", (name, pos))
+    return name
+
+
+def create_category(body):
+    name = clean_str(body.get("name"), 60)
+    if not name:
+        raise ApiError(400, "Falta el nombre")
+    c = find_category(name)
+    if c:
+        raise ApiError(409, "Ya existe: «%s»" % c["name"])
+    canonical_category(name)
+    return {"name": name}
+
+
+def rename_category(cid, body):
+    name = clean_str(body.get("name"), 60)
+    c = row("SELECT * FROM categories WHERE id=?", (cid,))
+    if not c:
+        raise ApiError(404, "Categoría no encontrada")
+    if not name:
+        raise ApiError(400, "Falta el nombre")
+    other = find_category(name)
+    if other and other["id"] != cid:
+        raise ApiError(409, "Ya existe: «%s»" % other["name"])
+    DB.execute("UPDATE categories SET name=? WHERE id=?", (name, cid))
+    DB.execute("UPDATE products SET category=? WHERE category=?", (name, c["name"]))
+    return {"ok": True}
+
+
+def delete_category(cid):
+    c = row("SELECT * FROM categories WHERE id=?", (cid,))
+    if c:
+        DB.execute("UPDATE products SET category='' WHERE category=?", (c["name"],))
+        DB.execute("DELETE FROM categories WHERE id=?", (cid,))
+    return {"ok": True}
+
+
 def create_store(body):
     name = clean_str(body.get("name"), 60)
     if not name:
@@ -663,6 +742,10 @@ ROUTES = [
     ("DELETE", r"/api/products/(\d+)",
      lambda m, b: DB.execute("DELETE FROM products WHERE id=?", (_id(m),)) and {"ok": True}, True),
     ("POST", r"/api/products/(\d+)/out", lambda m, b: mark_out(_id(m), b), True),
+
+    ("POST", r"/api/categories", lambda m, b: create_category(b), True),
+    ("PATCH", r"/api/categories/(\d+)", lambda m, b: rename_category(_id(m), b), True),
+    ("DELETE", r"/api/categories/(\d+)", lambda m, b: delete_category(_id(m)), True),
 
     ("POST", r"/api/stores", lambda m, b: create_store(b), True),
     ("PATCH", r"/api/stores/(\d+)", lambda m, b: rename_store(_id(m), b), True),

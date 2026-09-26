@@ -1,6 +1,6 @@
 /* Service worker: guarda la interfaz para que la app abra al instante y sin red.
    Los datos (/api) nunca se cachean aquí; la app guarda su propia copia local. */
-const CACHE = 'comida-v2';
+const CACHE = 'comida-v3';
 const SHELL = ['/', '/index.html', '/styles.css', '/app.js', '/manifest.webmanifest',
   '/icons/icon-192.png', '/icons/icon-512.png', '/icons/apple-touch-icon.png'];
 
