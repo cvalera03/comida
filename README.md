@@ -50,10 +50,12 @@ Elige **una** de las dos opciones.
 
 1. `git push` desde el Mac y espera a que la Action termine en verde
    ([pestaña Actions](https://github.com/cvalera03/comida/actions), unos 2 minutos).
-2. En el Terminal de ZimaOS (o por SSH), descarga la imagen nueva y recrea el contenedor:
+2. En el Terminal de ZimaOS (o por SSH), descarga la imagen nueva y recrea el contenedor
+   (todo con `sudo`: el usuario normal de ZimaOS no tiene acceso a Docker):
    ```bash
-   docker pull ghcr.io/cvalera03/comida:latest && cd "$(docker inspect comida --format '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}')" && docker compose up -d
+   sudo docker pull ghcr.io/cvalera03/comida:latest && DIR=$(sudo docker inspect comida --format '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}') && sudo docker compose --project-directory "$DIR" up -d
    ```
+   Alternativa sin comandos para el segundo paso: icono de Comida → ⋮ → Settings → Save.
 3. En los iPhone, cerrad la app (deslizar hacia arriba) y abridla de nuevo. Si aún se ve la
    versión anterior, repetidlo una vez más.
 
