@@ -1,0 +1,63 @@
+# ZimaOS → App Store → "+" (arriba a la derecha) → Instalar una app personalizada → Importar.
+# Pega este fichero. Antes cambia:
+#   1. TU_USUARIO_GITHUB por tu usuario (la imagen la publica el workflow de GitHub Actions)
+#   2. APP_PASSWORD por la contraseña que usaréis los dos
+name: comida
+services:
+  comida:
+    image: ghcr.io/TU_USUARIO_GITHUB/comida:latest
+    container_name: comida
+    restart: unless-stopped
+    ports:
+      - target: 8080
+        published: "8420"
+        protocol: tcp
+    environment:
+      APP_PASSWORD: cambia-esta-contraseña
+      TZ: Europe/Madrid
+    volumes:
+      - type: bind
+        source: /DATA/AppData/comida
+        target: /data
+    x-casaos:
+      envs:
+        - container: APP_PASSWORD
+          description:
+            en_us: Shared password for both phones
+            es_es: Contraseña compartida para los dos móviles
+        - container: TZ
+          description:
+            en_us: Time zone
+            es_es: Zona horaria
+      ports:
+        - container: "8080"
+          description:
+            en_us: Web UI
+            es_es: Interfaz web
+      volumes:
+        - container: /data
+          description:
+            en_us: Database and config
+            es_es: Base de datos y configuración
+
+x-casaos:
+  architectures:
+    - amd64
+    - arm64
+  main: comida
+  author: Carlos
+  developer: Carlos
+  category: Utilities
+  title:
+    en_us: Comida
+    es_es: Comida
+  tagline:
+    en_us: Weekly batch cooking planner
+    es_es: Planificador de batch cooking
+  description:
+    en_us: Recipes, weekly plan, shopping list, pantry and supermarket price comparison.
+    es_es: Recetas, plan semanal, lista de la compra, despensa y comparador de precios.
+  icon: https://raw.githubusercontent.com/TU_USUARIO_GITHUB/comida/main/public/icons/icon-512.png
+  index: /
+  port_map: "8420"
+  scheme: http

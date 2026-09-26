@@ -1,0 +1,16 @@
+# Uso por SSH (en ZimaOS o en cualquier servidor con Docker):
+#   APP_PASSWORD=tu-contraseña docker compose up -d --build
+# Para instalarla desde la interfaz de ZimaOS usa zimaos/comida.yml.
+services:
+  comida:
+    build: .
+    image: comida:latest
+    container_name: comida
+    restart: unless-stopped
+    ports:
+      - "8420:8080"
+    environment:
+      APP_PASSWORD: ${APP_PASSWORD:?Define APP_PASSWORD (contraseña compartida)}
+      TZ: Europe/Madrid
+    volumes:
+      - ${DATA_PATH:-/DATA/AppData/comida}:/data

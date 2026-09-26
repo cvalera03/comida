@@ -1,0 +1,8 @@
+data/
+.git/
+.github/
+tools/
+*.tar
+*.md
+__pycache__/
+.DS_Store
