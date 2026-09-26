@@ -46,7 +46,19 @@ Elige **una** de las dos opciones.
    pega el contenido de `zimaos/comida.yml` y dale a instalar.
 5. Abre `http://<ip-del-zimaos>:8420`.
 
-Para actualizar después: `git push` → espera a que termine la Action → en ZimaOS, la app → **Update/Rebuild**.
+### Actualizar a una versión nueva
+
+1. `git push` desde el Mac y espera a que la Action termine en verde
+   ([pestaña Actions](https://github.com/cvalera03/comida/actions), unos 2 minutos).
+2. En el Terminal de ZimaOS (o por SSH), descarga la imagen nueva y recrea el contenedor:
+   ```bash
+   docker pull ghcr.io/cvalera03/comida:latest && cd "$(docker inspect comida --format '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}')" && docker compose up -d
+   ```
+3. En los iPhone, cerrad la app (deslizar hacia arriba) y abridla de nuevo. Si aún se ve la
+   versión anterior, repetidlo una vez más.
+
+Los datos no se tocan: viven en `/DATA/AppData/comida` y el servidor adapta la base de datos
+a la versión nueva automáticamente al arrancar.
 
 ### Opción B — Por SSH, construyendo en el propio servidor
 
