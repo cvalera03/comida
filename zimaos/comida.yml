@@ -1,6 +1,6 @@
 # ZimaOS → App Store → "+" (arriba a la derecha) → Instalar una app personalizada → Importar.
 # Pega este fichero. Antes cambia:
-#   1. IP-DEL-ZIMAOS (abajo, en "icon") por la IP de tu ZimaOS
+#   1. (nada: la imagen y el icono ya apuntan a cvalera03)
 #   2. APP_PASSWORD por la contraseña que usaréis los dos
 name: comida
 services:
@@ -57,7 +57,7 @@ x-casaos:
   description:
     en_us: Recipes, weekly plan, shopping list, pantry and supermarket price comparison.
     es_es: Recetas, plan semanal, lista de la compra, despensa y comparador de precios.
-  icon: http://IP-DEL-ZIMAOS:8420/icons/icon-512.png
+  icon: https://raw.githubusercontent.com/cvalera03/comida/main/public/icons/icon-512.png
   index: /
   port_map: "8420"
   scheme: http
