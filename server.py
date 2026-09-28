@@ -84,7 +84,7 @@ CREATE TABLE IF NOT EXISTS products(
   name TEXT NOT NULL UNIQUE COLLATE NOCASE,
   category TEXT NOT NULL DEFAULT '',
   unit TEXT NOT NULL DEFAULT '',
-  staple INTEGER NOT NULL DEFAULT 0,      -- 1 = despensa/especia: no se gasta al cocinar
+  staple INTEGER NOT NULL DEFAULT 0,      -- obsoleto: la despensa ahora es solo manual
   in_stock INTEGER NOT NULL DEFAULT 0,
   notes TEXT NOT NULL DEFAULT '',
   updated_at INTEGER
@@ -180,7 +180,7 @@ def init_db():
                 DB.execute("INSERT INTO stores(name) VALUES (?)", (s,))
             for name, cat in SEED_STAPLES:
                 DB.execute(
-                    "INSERT INTO products(name, category, staple, in_stock, updated_at) VALUES (?,?,1,1,?)",
+                    "INSERT INTO products(name, category, in_stock, updated_at) VALUES (?,?,1,?)",
                     (name, cat, now),
                 )
         migrate()
@@ -357,7 +357,7 @@ def full_state():
     }
 
 
-PRODUCT_FIELDS = {"name", "category", "unit", "staple", "in_stock", "notes"}
+PRODUCT_FIELDS = {"name", "category", "unit", "in_stock", "notes"}
 
 
 def product_values(body, partial):
@@ -365,7 +365,7 @@ def product_values(body, partial):
     for k in PRODUCT_FIELDS:
         if k not in body:
             continue
-        if k in ("staple", "in_stock"):
+        if k == "in_stock":
             vals[k] = bool_int(body[k])
         else:
             vals[k] = clean_str(body[k], 120 if k != "notes" else 2000)
@@ -547,18 +547,14 @@ def clear_plan(_body):
     return {"ok": True}
 
 
-def mark_cooked(body):
-    consume = {int(x) for x in body.get("consume_ids") or []}
-    now = int(time.time())
-    for pid in consume:
-        DB.execute(
-            "UPDATE products SET in_stock=0, updated_at=? WHERE id=? AND staple=0", (now, pid)
-        )
+def mark_cooked(_body):
+    """Las recetas de la semana cuentan como cocinadas y salen de la semana.
+    La despensa no se toca: lo que se acaba lo marcáis vosotros a mano."""
     cur = DB.execute(
         "UPDATE recipes SET planned=0, times_cooked=times_cooked+1, last_cooked=? WHERE planned=1",
-        (now,),
+        (int(time.time()),),
     )
-    return {"recipes": cur.rowcount, "consumed": len(consume)}
+    return {"recipes": cur.rowcount}
 
 
 HISTORY_KEEP = 30

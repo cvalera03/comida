@@ -261,7 +261,7 @@ function viewSemana() {
 
     if (missing.length) {
       h += `<div class="section-title">Os falta</div><div class="card"><ul class="list ing-list">${missing.map((n) => `
-        <li><span class="dot ${n.p.staple ? 'staple' : 'no'}"></span>
+        <li><span class="dot no"></span>
         <span>${esc(n.p.name)}<div class="meta muted small">${esc(n.recipes.join(', '))}</div></span>
         <span class="q">${IDX.shoppingByProduct.has(n.p.id) ? '<span class="pill ok">En la lista</span>' : '<span class="pill">No está en la lista</span>'}</span></li>`).join('')}
       </ul></div>`;
@@ -369,7 +369,7 @@ function datalistProducts() {
 // -------------------------------------------------------------- despensa ---
 function viewDespensa() {
   const have = S.data.products.filter((p) => p.in_stock).length;
-  const seg = [['todo', 'Todo'], ['tengo', 'Tengo'], ['falta', 'Falta'], ['basicos', 'Especias y básicos']];
+  const seg = [['todo', 'Todo'], ['tengo', 'Tengo'], ['falta', 'Falta']];
   return header('Despensa', `${have} de ${S.data.products.length} en casa`,
     `<div style="display:flex;gap:8px"><button class="icon-btn ghost" data-act="categories" aria-label="Categorías">${ICON.tag}</button>
     <button class="icon-btn" data-act="new-product" aria-label="Nuevo producto">${ICON.plus}</button></div>`)
@@ -382,21 +382,21 @@ function despensaList() {
   const q = norm(S.ui.qDespensa);
   const f = S.ui.fDespensa;
   const list = S.data.products.filter((p) => (!q || norm(p.name).includes(q) || norm(p.category).includes(q))
-    && (f === 'todo' || (f === 'tengo' && p.in_stock) || (f === 'falta' && !p.in_stock) || (f === 'basicos' && p.staple)));
+    && (f === 'todo' || (f === 'tengo' && p.in_stock) || (f === 'falta' && !p.in_stock)));
   if (!S.data.products.length) return empty('Despensa vacía', 'Añade productos o crea recetas: sus ingredientes aparecerán aquí.');
   if (!list.length) return empty('Nada por aquí', 'No hay productos con este filtro.');
   let h = '';
   for (const [cat, items] of groupBy(list, (p) => p.category || '')) {
     h += `<div class="section-title">${esc(cat || 'Sin categoría')}</div><div class="card"><div class="list">${items.map((p) => {
       const b = bestPrice(p.id);
-      const meta = [p.staple ? 'Básico' : '', p.unit, b ? `${eur(b.price)} en ${b.store}` : ''].filter(Boolean).join(' · ');
+      const meta = [p.unit, b ? `${eur(b.price)} en ${b.store}` : ''].filter(Boolean).join(' · ');
       return `<div class="row" data-act="open-product" data-id="${p.id}">
         <span class="dot ${p.in_stock ? 'ok' : 'no'}"></span>
         <span class="main"><div class="title">${esc(p.name)}</div>${meta ? `<div class="meta">${esc(meta)}</div>` : ''}</span>
         <button class="pill ${p.in_stock ? 'ok' : 'no'}" style="border:0;padding:6px 10px;cursor:pointer" data-act="toggle-stock" data-id="${p.id}">${p.in_stock ? 'Tengo' : 'Falta'}</button></div>`;
     }).join('')}</div></div>`;
   }
-  return h + '<p class="hint">Pulsa «Tengo» cuando algo se acabe: se marcará como agotado y se añadirá a la compra. Los básicos (especias, aceite…) no se gastan al cocinar; márcalos vosotros.</p>';
+  return h + '<p class="hint">Cocinar no gasta nada de la despensa: cuando algo se acabe, pulsad «Tengo» y pasará a «Falta» (y se añadirá a la compra).</p>';
 }
 
 // ---------------------------------------------------------------- ahorro ---
@@ -545,7 +545,7 @@ function openRecipe(id) {
     </div>
     <div class="section-title">Ingredientes</div>
     <div class="card">${ings.length ? `<ul class="list ing-list">${ings.map((i) => `<li data-act="open-product" data-id="${i.p.id}" style="cursor:pointer">
-      <span class="dot ${i.p.in_stock ? 'ok' : 'no'}"></span><span>${esc(i.p.name)}${i.p.staple ? ' <span class="pill">básico</span>' : ''}${IDX.shoppingByProduct.has(i.p.id) ? ' <span class="pill ok">en la lista</span>' : ''}</span>
+      <span class="dot ${i.p.in_stock ? 'ok' : 'no'}"></span><span>${esc(i.p.name)}${IDX.shoppingByProduct.has(i.p.id) ? ' <span class="pill ok">en la lista</span>' : ''}</span>
       <span class="q">${esc(i.quantity)}</span></li>`).join('')}</ul>` : '<div class="empty">Sin ingredientes</div>'}</div>
     <p class="hint"><span class="dot ok"></span> lo tenéis · <span class="dot no"></span> falta</p>
     ${r.instructions ? `<div class="section-title">Preparación</div><div class="card pad recipe-body">${esc(r.instructions)}</div>` : ''}
@@ -614,7 +614,6 @@ function openProduct(id) {
       </div>
       <div class="card">
         <div class="switch-row"><div>Lo tenemos en casa</div><label class="switch"><input type="checkbox" name="in_stock" ${p?.in_stock ? 'checked' : ''}><i></i></label></div>
-        <div class="switch-row"><div>Básico / especia<small>No se gasta al cocinar; avisad vosotros cuando se acabe</small></div><label class="switch"><input type="checkbox" name="staple" ${p?.staple ? 'checked' : ''}><i></i></label></div>
       </div>
       <div class="spacer"></div>
       <label class="field"><span>Notas</span><textarea name="notes" style="min-height:60px" placeholder="Marca preferida, dónde está…">${esc(p?.notes)}</textarea></label>
@@ -663,7 +662,7 @@ async function saveProduct(form) {
   const fd = new FormData(form);
   const body = {
     name: fd.get('name'), category: fd.get('category'), unit: fd.get('unit'), notes: fd.get('notes'),
-    in_stock: fd.get('in_stock') === 'on', staple: fd.get('staple') === 'on',
+    in_stock: fd.get('in_stock') === 'on',
   };
   if (!form.dataset.id) {
     body.prices = [];
@@ -810,20 +809,6 @@ function openHistory(listId) {
   openSheet(html, { kind: 'history' });
 }
 
-// Hemos cocinado
-function openCooked() {
-  const needs = plannedNeeds();
-  const consumable = needs.filter((n) => !n.p.staple);
-  const staples = needs.filter((n) => n.p.staple);
-  const html = sheetHead('¡A comer!', 'Cancelar', 'Confirmar', 'confirm-cooked') + `
-    <p class="muted" style="margin:4px 4px 12px">Marca lo que se ha gastado. Pasará a «falta» en la despensa. Las recetas saldrán de la semana.</p>
-    ${consumable.length ? `<div class="card"><div class="list">${consumable.map((n) => `
-      <label class="row"><input type="checkbox" name="consume" value="${n.p.id}" checked style="width:22px;height:22px;accent-color:var(--accent)">
-      <span class="main"><div class="title">${esc(n.p.name)}</div><div class="meta">${esc(n.qty.join(' + '))}</div></span></label>`).join('')}</div></div>` : ''}
-    ${staples.length ? `<div class="section-title">Básicos (no se gastan)</div><div class="card pad small muted">${esc(staples.map((n) => n.p.name).join(', '))}</div>` : ''}
-    <div class="btn-row"><button class="btn primary" data-act="confirm-cooked">Confirmar</button></div>`;
-  openSheet(html, { kind: 'cooked' });
-}
 
 // ---------------------------------------------------------------- acciones --
 const ACTIONS = {
@@ -852,11 +837,10 @@ const ACTIONS = {
     const r = await api('POST', '/api/plan/generate-list');
     toast(r.added ? `${plural(r.added, 'producto añadido', 'productos añadidos')} a la compra` : 'La lista ya estaba al día');
   },
-  'cooked': () => openCooked(),
-  'confirm-cooked': async () => {
-    const ids = $$('#sheet input[name="consume"]:checked').map((i) => Number(i.value));
-    await api('POST', '/api/plan/cooked', { consume_ids: ids });
-    closeSheet(); toast('¡Semana cocinada! Despensa actualizada.');
+  'cooked': async () => {
+    if (!confirm('¿Marcar las recetas de esta semana como cocinadas? Saldrán de la semana; la despensa no cambia.')) return;
+    await api('POST', '/api/plan/cooked');
+    toast('¡Semana cocinada!');
   },
   'clear-plan': async () => { if (confirm('¿Quitar todas las recetas de esta semana?')) await api('POST', '/api/plan/clear'); },
 

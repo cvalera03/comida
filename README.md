@@ -8,10 +8,10 @@ iPhone como una app más (PWA) y los cambios se ven al instante en los dos móvi
 
 | Sección | Para qué |
 |---|---|
-| **Semana** | Recetas elegidas para este domingo, qué falta, «Añadir lo que falta» a la compra y «Ya hemos cocinado» (marca como gastados los ingredientes que elijáis y vacía la semana). |
+| **Semana** | Recetas elegidas para este domingo, qué falta, «Añadir lo que falta» a la compra y «Ya hemos cocinado» (cuenta las recetas como hechas y vacía la semana; la despensa no cambia). |
 | **Recetas** | Crear, editar y eliminar recetas con ingredientes y cantidades, raciones, enlace, preparación y notas. El círculo de cada receta la mete o saca de la semana. |
 | **Compra** | Lista agrupada por categoría, con el precio más barato conocido. Se marca al ir metiendo en el carro (**funciona sin cobertura**: los cambios se envían al volver la red). «Terminar compra» pasa lo comprado a la despensa. |
-| **Despensa** | Inventario: qué hay y qué falta. Pulsar «Tengo» → pasa a «Falta» y se añade a la compra. Los **básicos/especias** no se gastan al cocinar: los marcáis vosotros cuando se acaben. En cada producto se apunta **precio y calidad (★1–5) por supermercado**. |
+| **Despensa** | Inventario: qué hay y qué falta. Es **manual**: cocinar no gasta nada; cuando algo se acaba, pulsar «Tengo» → pasa a «Falta» y se añade a la compra. Al añadir una receta a la semana, solo va a la compra lo que no está en la despensa. En cada producto se apunta **precio y calidad (★1–5) por supermercado**. |
 | **Ahorro** | Calcula dónde comprar la lista para que salga más barata: eliges el máximo de supermercados a visitar, la calidad mínima y cuánto pesa la calidad frente al precio. Muestra la compra repartida por tienda, el total, el ahorro frente a ir a un solo súper y qué productos no tienen precio aún. |
 
 ### Cómo funciona por dentro
