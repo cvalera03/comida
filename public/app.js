@@ -517,6 +517,7 @@ function openSheet(html, meta = {}) {
   sh.hidden = false;
   $('#sheet-backdrop').hidden = false;
   sh.scrollTop = 0;
+  sh.classList.toggle('tall', !!meta.tall);
   S.sheet = meta;
   document.body.style.overflow = 'hidden';
 }
@@ -601,13 +602,13 @@ async function saveRecipe(form) {
 }
 
 // Producto
-function openProduct(id) {
+function openProduct(id, preset = {}) {
   const p = id ? IDX.products.get(id) : null;
   const used = p ? (IDX.usedIn[p.id] || []) : [];
   const best = p && bestPrice(p.id);
   const html = sheetHead(p ? p.name : 'Nuevo producto', 'Cerrar', 'Guardar', 'save-product') + `
     <form id="product-form" data-form="product" data-id="${p ? p.id : ''}" autocomplete="off">
-      <label class="field"><span>Nombre</span><input name="name" required value="${esc(p?.name)}" placeholder="Garbanzos cocidos"></label>
+      <label class="field"><span>Nombre</span><input name="name" required value="${esc(p ? p.name : preset.name)}" placeholder="Garbanzos cocidos"></label>
       <div class="grid2">
         <label class="field"><span>Categoría</span>${categorySelect(p?.category)}</label>
         <label class="field"><span>Unidad / formato</span><input name="unit" value="${esc(p?.unit)}" placeholder="bote 400 g"></label>
@@ -691,21 +692,21 @@ async function saveProduct(form) {
 // Elegir productos para la compra: tocar añade o quita; si no existe, se crea.
 function openPicker() {
   const html = sheetHead('Añadir a la compra', 'Listo') + `
-    <input id="q-picker" class="search" type="search" placeholder="Buscar o escribir un producto nuevo" data-input="q-picker" autocomplete="off" value="${esc(S.ui.qPicker || '')}">
+    <div class="sheet-search"><input id="q-picker" class="search" type="search" placeholder="Buscar producto" data-input="q-picker" autocomplete="off" value="${esc(S.ui.qPicker || '')}"></div>
     <div id="picker-list">${pickerList()}</div>`;
-  openSheet(html, { kind: 'picker', live: () => { const el = $('#picker-list'); if (el) el.innerHTML = pickerList(); } });
+  openSheet(html, { kind: 'picker', tall: true, live: () => { const el = $('#picker-list'); if (el) el.innerHTML = pickerList(); } });
 }
 
 function pickerList() {
   const q = S.ui.qPicker || '';
   const nq = norm(q.trim());
   const list = S.data.products.filter((p) => !nq || norm(p.name).includes(nq) || norm(p.category).includes(nq));
-  const exact = nq && S.data.products.some((p) => norm(p.name) === nq);
-  const create = nq && !exact
-    ? `<div class="section-title">¿No está?</div><div class="card"><button class="row" data-act="picker-new"><span class="check" style="border-style:dashed">${ICON.check}</span>
-      <span class="main"><div class="title">Crear «${esc(q.trim())}»</div><div class="meta">Producto nuevo, se añade a la despensa y a la compra</div></span></button></div>`
-    : '';
-  if (!list.length) return create || empty('Sin productos', 'Escribe el nombre de un producto para crearlo.');
+  if (!list.length) {
+    return nq
+      ? empty(`No hay ningún «${q.trim()}»`, 'Los productos se crean en Despensa, con su categoría y precios.',
+        `<button class="btn" data-act="picker-to-pantry">Crear en Despensa</button>`)
+      : empty('Sin productos', 'Crea vuestros productos en Despensa y aparecerán aquí.');
+  }
   let h = '';
   for (const [cat, items] of groupBy(list, (p) => p.category || '')) {
     h += `<div class="section-title">${esc(cat || 'Sin categoría')}</div><div class="card"><div class="list">${items.map((p) => {
@@ -717,7 +718,7 @@ function pickerList() {
         <span class="main"><div class="title">${esc(p.name)}</div><div class="meta">${esc(meta)}</div></span></button>`;
     }).join('')}</div></div>`;
   }
-  return h + create;
+  return h;
 }
 
 function openCategories() {
@@ -904,7 +905,7 @@ const ACTIONS = {
   },
   'product-to-list': async (t) => {
     const p = IDX.products.get(Number(t.dataset.id));
-    await api('POST', '/api/shopping', { name: p.name });
+    await api('POST', '/api/shopping', { product_id: p.id });
     closeSheet(); toast('Añadido a la compra');
   },
   'f-despensa': (t) => { S.ui.fDespensa = t.dataset.f; render(); },
@@ -923,21 +924,18 @@ const ACTIONS = {
     if (!confirm(n ? `${plural(n, 'producto quedará', 'productos quedarán')} sin categoría. ¿Borrar?` : '¿Borrar esta categoría?')) return;
     await api('DELETE', `/api/categories/${t.dataset.id}`);
   },
-  'picker': () => { S.ui.qPicker = ''; openPicker(); setTimeout(() => $('#q-picker')?.focus(), 50); },
+  'picker': () => { S.ui.qPicker = ''; openPicker(); },
   'picker-toggle': async (t) => {
     const id = Number(t.dataset.id);
     const item = IDX.shoppingByProduct.get(id);
     t.querySelector('.check').classList.toggle('on', !item);
     if (item) await api('DELETE', `/api/shopping/${item.id}`);
-    else await api('POST', '/api/shopping', { name: IDX.products.get(id).name });
+    else await api('POST', '/api/shopping', { product_id: id });
   },
-  'picker-new': async () => {
+  'picker-to-pantry': () => {
     const name = (S.ui.qPicker || '').trim();
-    if (!name) return;
-    await api('POST', '/api/shopping', { name });
-    S.ui.qPicker = '';
-    const q = $('#q-picker'); if (q) { q.value = ''; q.focus(); }
-    toast(`${name}: creado y añadido`);
+    switchTab('despensa');
+    openProduct(null, { name });
   },
   'form-quality': (t) => {
     const row = t.closest('.price-row');
@@ -1077,6 +1075,20 @@ document.addEventListener('visibilitychange', () => {
 });
 window.addEventListener('online', () => loadState());
 window.addEventListener('offline', () => setOnline(false));
+
+// iOS no encoge la página al abrir el teclado: lo medimos con visualViewport
+// para que las hojas queden siempre por encima del teclado.
+if (window.visualViewport) {
+  const vv = window.visualViewport;
+  const fit = () => {
+    const kb = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+    document.documentElement.style.setProperty('--kb', `${kb}px`);
+    document.documentElement.style.setProperty('--vvh', `${vv.height}px`);
+  };
+  vv.addEventListener('resize', fit);
+  vv.addEventListener('scroll', fit);
+  fit();
+}
 
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
 start();

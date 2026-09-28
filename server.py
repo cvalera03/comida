@@ -717,7 +717,16 @@ def patch_shopping(sid, body):
 
 
 def create_shopping(body):
-    pid = get_or_create_product(body.get("name"))
+    """Añadir a mano a la compra: solo productos que ya existen en la despensa
+    (se crean allí, con su categoría y precios)."""
+    p = None
+    if body.get("product_id"):
+        p = row("SELECT id FROM products WHERE id=?", (int(body["product_id"]),))
+    elif body.get("name"):
+        p = find_product(body["name"])
+    if not p:
+        raise ApiError(404, "Ese producto no existe; créalo primero en Despensa")
+    pid = p["id"]
     sid, added = add_item(pid, manual=True, quantity=clean_str(body.get("quantity"), 60))
     return {"id": sid, "added": added}
 

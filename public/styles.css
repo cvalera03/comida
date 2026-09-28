@@ -220,11 +220,14 @@ a { color: var(--accent); }
 /* ---------- hoja modal ---------- */
 .sheet-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 20; animation: fade .2s; }
 .sheet {
-  position: fixed; left: 0; right: 0; bottom: 0; z-index: 21; max-height: calc(100dvh - var(--safe-t) - 24px);
+  position: fixed; left: 0; right: 0; bottom: var(--kb, 0px); z-index: 21;
+  max-height: calc(var(--vvh, 100dvh) - var(--safe-t) - 24px);
   background: var(--bg); border-radius: 16px 16px 0 0; overflow-y: auto; -webkit-overflow-scrolling: touch;
   padding: 0 16px calc(var(--safe-b) + 20px); animation: up .25s cubic-bezier(.2,.8,.2,1);
   max-width: 720px; margin: 0 auto; overscroll-behavior: contain;
 }
+.sheet.tall { height: calc(var(--vvh, 100dvh) - var(--safe-t) - 24px); }
+.sheet-search { position: sticky; top: 50px; z-index: 1; background: var(--bg); padding-bottom: 2px; }
 .sheet-head {
   position: sticky; top: 0; z-index: 1; background: var(--bg); display: flex; align-items: center;
   justify-content: space-between; gap: 10px; padding: 14px 0 10px; margin-bottom: 4px;
