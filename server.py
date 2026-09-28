@@ -293,19 +293,6 @@ def find_product(name):
     return None
 
 
-def get_or_create_product(name):
-    name = clean_str(name, 120)
-    if not name:
-        raise ApiError(400, "El nombre no puede estar vacío")
-    p = find_product(name)
-    if p:
-        return p["id"]
-    cur = DB.execute(
-        "INSERT INTO products(name, updated_at) VALUES (?, ?)", (name, int(time.time()))
-    )
-    return cur.lastrowid
-
-
 def active_list_id():
     r = row("SELECT id FROM shopping_lists WHERE closed_at IS NULL ORDER BY id DESC LIMIT 1")
     if r:
@@ -483,6 +470,24 @@ def mark_out(pid, body):
     return {"ok": True, "added": added}
 
 
+def ingredient_product(ing):
+    """Los ingredientes son productos de la despensa: se eligen, no se crean aquí."""
+    if not isinstance(ing, dict):
+        return None
+    if ing.get("product_id"):
+        p = row("SELECT id FROM products WHERE id=?", (int(ing["product_id"]),))
+        if not p:
+            raise ApiError(400, "Un ingrediente ya no existe en la despensa")
+        return p["id"]
+    name = clean_str(ing.get("name"), 120)
+    if not name:
+        return None
+    p = find_product(name)
+    if not p:
+        raise ApiError(400, "«%s» no existe; créalo primero en Despensa" % name)
+    return p["id"]
+
+
 def save_recipe(rid, body):
     name = clean_str(body.get("name"), 120)
     if not name:
@@ -514,11 +519,8 @@ def save_recipe(rid, body):
         DB.execute("DELETE FROM recipe_ingredients WHERE recipe_id=?", (rid,))
         seen = set()
         for pos, ing in enumerate(body.get("ingredients") or []):
-            pname = clean_str(ing.get("name"), 120)
-            if not pname:
-                continue
-            pid = get_or_create_product(pname)
-            if pid in seen:
+            pid = ingredient_product(ing)
+            if pid is None or pid in seen:
                 continue
             seen.add(pid)
             DB.execute(

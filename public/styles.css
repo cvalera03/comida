@@ -166,6 +166,7 @@ a { color: var(--accent); }
 .switch input:checked + i::after { transform: translateX(20px); }
 
 .ing-row { display: grid; grid-template-columns: 1fr 96px 36px; gap: 6px; margin-bottom: 6px; }
+.ing-row .ing-name { display: flex; align-items: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: var(--card-2); }
 .ing-row .x { border: 0; background: none; color: var(--danger); font-size: 22px; cursor: pointer; }
 
 .price-row { display: grid; grid-template-columns: 1fr 92px; gap: 8px; align-items: center; padding: 10px 16px; border-top: 1px solid var(--line); }

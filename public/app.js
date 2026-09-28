@@ -362,10 +362,6 @@ function shopRow(s) {
     ${s.checked ? '' : `<button class="row-btn danger" data-act="remove-shop" data-id="${s.id}" aria-label="Quitar ${esc(s.name)}">×</button>`}</div>`;
 }
 
-function datalistProducts() {
-  return `<datalist id="dl-products">${S.data.products.map((p) => `<option value="${esc(p.name)}">`).join('')}</datalist>`;
-}
-
 // -------------------------------------------------------------- despensa ---
 function viewDespensa() {
   const have = S.data.products.filter((p) => p.in_stock).length;
@@ -557,48 +553,89 @@ function openRecipe(id) {
 function openRecipeKeepScroll(id) { const y = $('#sheet').scrollTop; openRecipe(id); $('#sheet').scrollTop = y; }
 function safeUrl(u) { return /^https?:\/\//i.test(u) ? u : 'https://' + u; }
 
-// Receta: formulario
-function editRecipe(id) {
+// Receta: formulario. El borrador (S.draft) guarda lo escrito mientras se
+// eligen ingredientes en otra ventana.
+function recipeDraft(id) {
   const r = id ? S.data.recipes.find((x) => x.id === id) : null;
-  const ings = r ? r.ingredients.map((i) => ({ name: IDX.products.get(i.product_id)?.name || '', quantity: i.quantity })) : [];
-  while (ings.length < 3) ings.push({ name: '', quantity: '' });
-  const html = sheetHead(r ? 'Editar receta' : 'Nueva receta', 'Cancelar', 'Guardar', 'save-recipe') + `
-    <form id="recipe-form" data-form="recipe" data-id="${r ? r.id : ''}" autocomplete="off">
-      <label class="field"><span>Nombre</span><input name="name" required value="${esc(r?.name)}" placeholder="Lentejas con verduras"></label>
-      <div class="grid2">
-        <label class="field"><span>Raciones / táper</span><input name="servings" inputmode="numeric" value="${esc(r?.servings ?? '')}" placeholder="4"></label>
-        <label class="field"><span>Enlace (opcional)</span><input name="url" inputmode="url" value="${esc(r?.url)}" placeholder="https://…"></label>
-      </div>
-      <div class="field"><span>Ingredientes y cantidad</span><div id="ing-rows">${ings.map(ingRow).join('')}</div>
-        <button type="button" class="btn small" data-act="add-ing">+ Ingrediente</button>
-        <p class="hint">Los ingredientes nuevos se añaden a la despensa como «falta».</p></div>
-      <label class="field"><span>Preparación</span><textarea name="instructions" placeholder="Pasos…">${esc(r?.instructions)}</textarea></label>
-      <label class="field"><span>Notas</span><textarea name="notes" style="min-height:70px" placeholder="Se congela bien, aguanta 4 días…">${esc(r?.notes)}</textarea></label>
-      <button class="btn primary block" type="submit">Guardar</button>
-      ${datalistProducts()}
-    </form>`;
-  openSheet(html, { kind: 'recipe-edit', id });
-}
-function ingRow(i) {
-  return `<div class="ing-row"><input class="input" name="ing-name" list="dl-products" placeholder="Ingrediente" value="${esc(i.name)}">
-    <input class="input" name="ing-qty" placeholder="200 g" value="${esc(i.quantity)}">
-    <button type="button" class="x" data-act="rm-ing" aria-label="Quitar">×</button></div>`;
+  return {
+    id, name: r?.name || '', servings: r?.servings ?? '', url: r?.url || '',
+    instructions: r?.instructions || '', notes: r?.notes || '',
+    ingredients: r ? r.ingredients.map((i) => ({ product_id: i.product_id, quantity: i.quantity })) : [],
+  };
 }
 
-async function saveRecipe(form) {
-  const fd = new FormData(form);
-  const names = fd.getAll('ing-name'); const qtys = fd.getAll('ing-qty');
-  const body = {
+function editRecipe(id, draft = null) {
+  const d = S.draft = draft || recipeDraft(id);
+  const ings = d.ingredients.filter((i) => IDX.products.has(i.product_id));
+  const html = sheetHead(d.id ? 'Editar receta' : 'Nueva receta', 'Cancelar', 'Guardar', 'save-recipe') + `
+    <form id="recipe-form" data-form="recipe" data-id="${d.id || ''}" autocomplete="off">
+      <label class="field"><span>Nombre</span><input name="name" required value="${esc(d.name)}" placeholder="Lentejas con verduras"></label>
+      <div class="grid2">
+        <label class="field"><span>Raciones / táper</span><input name="servings" inputmode="numeric" value="${esc(d.servings)}" placeholder="4"></label>
+        <label class="field"><span>Enlace (opcional)</span><input name="url" inputmode="url" value="${esc(d.url)}" placeholder="https://…"></label>
+      </div>
+      <div class="field" id="ing-field"><span>Ingredientes y cantidad</span>
+        <div id="ing-rows">${ings.length ? ings.map(ingRow).join('') : '<div class="card empty small">Sin ingredientes todavía</div>'}</div>
+        <button type="button" class="btn small" data-act="add-ing">+ Añadir ingredientes</button></div>
+      <label class="field"><span>Preparación</span><textarea name="instructions" placeholder="Pasos…">${esc(d.instructions)}</textarea></label>
+      <label class="field"><span>Notas</span><textarea name="notes" style="min-height:70px" placeholder="Se congela bien, aguanta 4 días…">${esc(d.notes)}</textarea></label>
+      <button class="btn primary block" type="submit">Guardar</button>
+    </form>`;
+  openSheet(html, { kind: 'recipe-edit', id: d.id, onClose: () => { S.draft = null; closeSheet(); } });
+}
+
+function ingRow(i) {
+  const p = IDX.products.get(i.product_id);
+  return `<div class="ing-row" data-pid="${i.product_id}"><span class="input ing-name">${esc(p.name)}</span>
+    <input class="input" name="ing-qty" placeholder="200 g" value="${esc(i.quantity)}" aria-label="Cantidad de ${esc(p.name)}">
+    <button type="button" class="x" data-act="rm-ing" aria-label="Quitar ${esc(p.name)}">×</button></div>`;
+}
+
+// Pasa lo escrito en el formulario al borrador.
+function captureDraft() {
+  const f = $('#recipe-form');
+  if (!f || !S.draft) return S.draft;
+  const fd = new FormData(f);
+  Object.assign(S.draft, {
     name: fd.get('name'), servings: fd.get('servings'), url: fd.get('url'),
     instructions: fd.get('instructions'), notes: fd.get('notes'),
-    ingredients: names.map((n, i) => ({ name: n, quantity: qtys[i] })).filter((i) => i.name.trim()),
+    ingredients: $$('#ing-rows .ing-row').map((r) => ({
+      product_id: Number(r.dataset.pid), quantity: r.querySelector('[name="ing-qty"]').value,
+    })),
+  });
+  return S.draft;
+}
+
+async function saveRecipe() {
+  const d = captureDraft();
+  if (!d.name.trim()) return toast('Ponle un nombre a la receta');
+  const body = {
+    name: d.name, servings: d.servings, url: d.url, instructions: d.instructions, notes: d.notes,
+    ingredients: d.ingredients.map(({ product_id, quantity }) => ({ product_id, quantity })),
   };
-  if (!body.name.trim()) return toast('Ponle un nombre a la receta');
-  const id = form.dataset.id ? Number(form.dataset.id) : null;
-  const res = id ? await api('PUT', `/api/recipes/${id}`, body) : await api('POST', '/api/recipes', body);
+  const res = d.id ? await api('PUT', `/api/recipes/${d.id}`, body) : await api('POST', '/api/recipes', body);
+  S.draft = null;
   await loadState();
-  openRecipe(res.id || id);
+  openRecipe(res.id || d.id);
   toast('Receta guardada');
+}
+
+// Ventana para elegir ingredientes de la despensa (varios a la vez).
+function openIngPicker(selected) {
+  S.ingSel = selected || new Set(S.draft.ingredients.map((i) => i.product_id));
+  S.ui.qPicker = S.ui.qPicker || '';
+  const list = () => productPicker({
+    isOn: (p) => S.ingSel.has(p.id), act: 'ing-toggle', createAct: 'ing-create',
+    emptyText: 'Añadid productos en Despensa y aparecerán aquí.',
+  });
+  const html = sheetHead('Elegir ingredientes', 'Cancelar', 'Listo', 'ing-done') + `
+    <div class="sheet-search"><input id="q-picker" class="search" type="search" placeholder="Buscar en la despensa" data-input="q-picker" autocomplete="off" value="${esc(S.ui.qPicker)}"></div>
+    <div id="picker-list">${list()}</div>`;
+  openSheet(html, {
+    kind: 'ing-picker', tall: true, list,
+    live: () => { const el = $('#picker-list'); if (el) el.innerHTML = list(); },
+    onClose: () => editRecipe(S.draft.id, S.draft),
+  });
 }
 
 // Producto
@@ -632,7 +669,7 @@ function openProduct(id, preset = {}) {
         ${IDX.shoppingByProduct.has(p.id) ? '<button class="btn" disabled>Ya está en la compra</button>' : `<button class="btn" data-act="product-to-list" data-id="${p.id}">Añadir a la compra</button>`}
       </div>
       <div class="btn-row"><button class="btn danger" data-act="delete-product" data-id="${p.id}">Eliminar producto</button></div>` : ''}`;
-  openSheet(html, { kind: 'product', id });
+  openSheet(html, { kind: 'product', id, onClose: preset.onClose, onCreated: preset.onCreated });
 }
 // p = null: producto nuevo; los valores van en el formulario y se guardan al crear.
 function priceRow(p, s, best) {
@@ -682,43 +719,53 @@ async function saveProduct(form) {
     closeSheet();
     toast('Guardado');
   } else {
-    await api('POST', '/api/products', body);
-    closeSheet();
-    toast(`${body.name.trim()} creado`);
+    const created = await api('POST', '/api/products', body);
+    if (S.sheet?.onCreated) {
+      const done = S.sheet.onCreated;
+      await loadState();
+      done(created);
+    } else {
+      closeSheet();
+      toast(`${body.name.trim()} creado`);
+    }
   }
 }
 
 // Supermercados
-// Elegir productos para la compra: tocar añade o quita; si no existe, se crea.
-function openPicker() {
-  const html = sheetHead('Añadir a la compra', 'Listo') + `
-    <div class="sheet-search"><input id="q-picker" class="search" type="search" placeholder="Buscar producto" data-input="q-picker" autocomplete="off" value="${esc(S.ui.qPicker || '')}"></div>
-    <div id="picker-list">${pickerList()}</div>`;
-  openSheet(html, { kind: 'picker', tall: true, live: () => { const el = $('#picker-list'); if (el) el.innerHTML = pickerList(); } });
-}
-
-function pickerList() {
-  const q = S.ui.qPicker || '';
-  const nq = norm(q.trim());
+// Selector de productos de la despensa, con buscador (compra e ingredientes).
+function productPicker({ isOn, act, createAct, emptyText }) {
+  const q = (S.ui.qPicker || '').trim();
+  const nq = norm(q);
   const list = S.data.products.filter((p) => !nq || norm(p.name).includes(nq) || norm(p.category).includes(nq));
   if (!list.length) {
     return nq
-      ? empty(`No hay ningún «${q.trim()}»`, 'Los productos se crean en Despensa, con su categoría y precios.',
-        `<button class="btn" data-act="picker-to-pantry">Crear en Despensa</button>`)
-      : empty('Sin productos', 'Crea vuestros productos en Despensa y aparecerán aquí.');
+      ? empty(`No hay ningún «${q}»`, 'Los productos se crean en Despensa, con su categoría y precios.',
+        `<button class="btn" data-act="${createAct}">Crear «${esc(q)}» en Despensa</button>`)
+      : empty('Sin productos', emptyText);
   }
   let h = '';
   for (const [cat, items] of groupBy(list, (p) => p.category || '')) {
     h += `<div class="section-title">${esc(cat || 'Sin categoría')}</div><div class="card"><div class="list">${items.map((p) => {
-      const inList = IDX.shoppingByProduct.get(p.id);
       const b = bestPrice(p.id);
       const meta = [p.in_stock ? 'En casa' : 'Falta', b ? `${eur(b.price)} en ${b.store}` : ''].filter(Boolean).join(' · ');
-      return `<button class="row" data-act="picker-toggle" data-id="${p.id}">
-        <span class="check ${inList ? 'on' : ''}">${ICON.check}</span>
+      return `<button class="row" data-act="${act}" data-id="${p.id}">
+        <span class="check ${isOn(p) ? 'on' : ''}">${ICON.check}</span>
         <span class="main"><div class="title">${esc(p.name)}</div><div class="meta">${esc(meta)}</div></span></button>`;
     }).join('')}</div></div>`;
   }
   return h;
+}
+
+// Añadir a la compra: tocar añade o quita.
+function openPicker() {
+  const list = () => productPicker({
+    isOn: (p) => IDX.shoppingByProduct.has(p.id), act: 'picker-toggle', createAct: 'picker-to-pantry',
+    emptyText: 'Crea vuestros productos en Despensa y aparecerán aquí.',
+  });
+  const html = sheetHead('Añadir a la compra', 'Listo') + `
+    <div class="sheet-search"><input id="q-picker" class="search" type="search" placeholder="Buscar producto" data-input="q-picker" autocomplete="off" value="${esc(S.ui.qPicker || '')}"></div>
+    <div id="picker-list">${list()}</div>`;
+  openSheet(html, { kind: 'picker', tall: true, list, live: () => { const el = $('#picker-list'); if (el) el.innerHTML = list(); } });
 }
 
 function openCategories() {
@@ -799,7 +846,7 @@ function openHistory(listId) {
       <div class="card">${bought.length ? `<ul class="list ing-list">${bought.map((i) => `<li><span class="dot ok"></span><span>${esc(i.name)}</span><span class="q">${esc(i.quantity)}</span></li>`).join('')}</ul>` : '<div class="empty">Nada</div>'}</div>
       ${left.length ? `<div class="section-title">No se compró (${left.length})</div><div class="card"><ul class="list ing-list">${left.map((i) => `<li><span class="dot no"></span><span>${esc(i.name)}</span></li>`).join('')}</ul></div>` : ''}
       <div class="btn-row"><button class="btn danger small" data-act="delete-history" data-id="${l.id}">Borrar del historial</button></div>`;
-    openSheet(html, { kind: 'history', id: listId, back: true });
+    openSheet(html, { kind: 'history', id: listId, onClose: () => openHistory() });
     return;
   }
   const html = sheetHead('Compras anteriores', 'Cerrar') + (lists.length
@@ -813,13 +860,38 @@ function openHistory(listId) {
 
 // ---------------------------------------------------------------- acciones --
 const ACTIONS = {
-  'close-sheet': () => (S.sheet?.back ? openHistory() : closeSheet()),
+  'close-sheet': () => (S.sheet?.onClose ? S.sheet.onClose() : closeSheet()),
   'new-recipe': () => editRecipe(null),
   'open-recipe': (t) => openRecipe(Number(t.dataset.id)),
   'edit-recipe': () => editRecipe(S.sheet.id),
-  'save-recipe': () => { const f = $('#recipe-form'); if (f.reportValidity()) saveRecipe(f); },
-  'add-ing': () => { $('#ing-rows').insertAdjacentHTML('beforeend', ingRow({ name: '', quantity: '' })); $$('#ing-rows input[name="ing-name"]').pop().focus(); },
-  'rm-ing': (t) => t.closest('.ing-row').remove(),
+  'save-recipe': () => { const f = $('#recipe-form'); if (f.reportValidity()) saveRecipe(); },
+  'add-ing': () => { captureDraft(); S.ui.qPicker = ''; openIngPicker(); },
+  'rm-ing': (t) => { t.closest('.ing-row').remove(); captureDraft(); },
+  'ing-toggle': (t) => {
+    const id = Number(t.dataset.id);
+    if (S.ingSel.has(id)) S.ingSel.delete(id); else S.ingSel.add(id);
+    t.querySelector('.check').classList.toggle('on', S.ingSel.has(id));
+  },
+  'ing-done': () => {
+    const d = S.draft;
+    const kept = d.ingredients.filter((i) => S.ingSel.has(i.product_id));
+    const have = new Set(kept.map((i) => i.product_id));
+    const added = [...S.ingSel].filter((id) => !have.has(id)).map((id) => ({ product_id: id, quantity: '' }));
+    d.ingredients = [...kept, ...added];
+    editRecipe(d.id, d);
+    if (added.length) {
+      $('#ing-field')?.scrollIntoView({ block: 'center' });
+      toast(`${plural(added.length, 'ingrediente añadido', 'ingredientes añadidos')}: poned la cantidad`);
+    }
+  },
+  'ing-create': () => {
+    const sel = S.ingSel;
+    const back = () => openIngPicker(sel);
+    openProduct(null, {
+      name: (S.ui.qPicker || '').trim(), onClose: back,
+      onCreated: (p) => { sel.add(p.id); S.ui.qPicker = ''; back(); toast(`${p.name} creado y marcado`); },
+    });
+  },
   'delete-recipe': async (t) => {
     if (!confirm('¿Eliminar esta receta?')) return;
     await api('DELETE', `/api/recipes/${t.dataset.id}`);
@@ -981,12 +1053,12 @@ const CHANGES = {
 
 const INPUTS = {
   'q-recetas': (t) => { S.ui.qRecetas = t.value; $('#list-area').innerHTML = recetasList(); },
-  'q-picker': (t) => { S.ui.qPicker = t.value; $('#picker-list').innerHTML = pickerList(); },
+  'q-picker': (t) => { S.ui.qPicker = t.value; if (S.sheet?.list) $('#picker-list').innerHTML = S.sheet.list(); },
   'q-despensa': (t) => { S.ui.qDespensa = t.value; $('#list-area').innerHTML = despensaList(); },
 };
 
 const FORMS = {
-  'recipe': (f) => saveRecipe(f),
+  'recipe': () => saveRecipe(),
   'product': (f) => saveProduct(f),
   'add-category': async (f) => {
     await api('POST', '/api/categories', { name: new FormData(f).get('name') });
